@@ -764,7 +764,7 @@ class FourierGr1ArmsWaistJointEefDataConfig:
 class PandaOmronDataConfig:
     video_keys = [
         "video.robot0_agentview_right",
-        "video.wrist_view",
+        "video.robot0_eye_in_hand",
         "video.robot0_agentview_left",
     ]
     state_keys = [
@@ -833,6 +833,132 @@ class PandaOmronDataConfig:
                     "action.gripper_close": "binary",
                     "action.base_motion": "min_max",
                     "action.control_mode": "binary",
+                },
+            ),
+        ]
+        return _build_composed_transform(transforms, self.state_keys, self.action_keys)
+
+
+###########################################################################################
+
+
+class DexJoCoSingleHandDataConfig:
+    random_single_non_wrist_view = False
+    video_keys = [
+        "video.primary_view",
+        "video.wrist_view",
+    ]
+    state_keys = [
+        "state.proprio",
+    ]
+    action_keys = [
+        "action.proprio",
+    ]
+    language_keys = ["annotation.human.task_description"]
+    observation_indices = [0]
+    action_indices = list(range(4))
+
+    def modality_config(self):
+        video_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.video_keys,
+        )
+        state_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.state_keys,
+        )
+        action_modality = ModalityConfig(
+            delta_indices=self.action_indices,
+            modality_keys=self.action_keys,
+        )
+        language_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.language_keys,
+        )
+        return {
+            "video": video_modality,
+            "state": state_modality,
+            "action": action_modality,
+            "language": language_modality,
+        }
+
+    def transform(self, *, image_hw: tuple[int, int] | None = None) -> ModalityTransform:
+        transforms = [
+            *_latent_world_video_transforms(self.video_keys, image_hw),
+            StateActionToTensor(apply_to=self.state_keys),
+            StateActionTransform(
+                apply_to=self.state_keys,
+                normalization_modes={
+                    "state.proprio": "min_max",
+                },
+            ),
+            StateActionToTensor(apply_to=self.action_keys),
+            StateActionTransform(
+                apply_to=self.action_keys,
+                normalization_modes={
+                    "action.proprio": "min_max",
+                },
+            ),
+        ]
+        return _build_composed_transform(transforms, self.state_keys, self.action_keys)
+
+
+class DexJoCoBimanualDataConfig:
+    random_single_non_wrist_view = False
+    video_keys = [
+        "video.primary_view",
+        "video.wrist_left",
+        "video.wrist_right",
+    ]
+    state_keys = [
+        "state.proprio",
+    ]
+    action_keys = [
+        "action.proprio",
+    ]
+    language_keys = ["annotation.human.task_description"]
+    observation_indices = [0]
+    action_indices = list(range(4))
+
+    def modality_config(self):
+        video_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.video_keys,
+        )
+        state_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.state_keys,
+        )
+        action_modality = ModalityConfig(
+            delta_indices=self.action_indices,
+            modality_keys=self.action_keys,
+        )
+        language_modality = ModalityConfig(
+            delta_indices=self.observation_indices,
+            modality_keys=self.language_keys,
+        )
+        return {
+            "video": video_modality,
+            "state": state_modality,
+            "action": action_modality,
+            "language": language_modality,
+        }
+
+    def transform(self, *, image_hw: tuple[int, int] | None = None) -> ModalityTransform:
+        transforms = [
+            *_latent_world_video_transforms(self.video_keys, image_hw),
+            StateActionToTensor(apply_to=self.state_keys),
+            StateActionTransform(
+                apply_to=self.state_keys,
+                normalization_modes={
+                    "state.proprio": "min_max",
+                },
+            ),
+            StateActionToTensor(apply_to=self.action_keys),
+            StateActionTransform(
+                apply_to=self.action_keys,
+                normalization_modes={
+                    "action.proprio": "min_max",
                 },
             ),
         ]
@@ -1735,6 +1861,8 @@ ROBOT_TYPE_CONFIG_MAP = {
     "gr1": FourierGr1ArmsWaistDataConfig(),
     "gr1_joint_eef": FourierGr1ArmsWaistJointEefDataConfig(),
     "PandaOmron": PandaOmronDataConfig(),
+    "dexjoco_single": DexJoCoSingleHandDataConfig(),
+    "dexjoco_bimanual": DexJoCoBimanualDataConfig(),
     "fractal": FractalDataConfig(),
     "fold_towel": FoldTowelDataConfig(),
 }

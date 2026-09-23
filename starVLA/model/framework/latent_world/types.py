@@ -14,6 +14,7 @@ VideoViews = Sequence[Sequence[FrameArray]]
 
 class LatentWorldPolicyTrainRawSample(TypedDict):
     primary_videos: torch.Tensor
+    wm_primary_video: NotRequired[torch.Tensor]
     wrist_images: torch.Tensor
     lang: str
     state: torch.Tensor
@@ -24,6 +25,7 @@ class LatentWorldPolicyTrainRawSample(TypedDict):
 
 class LatentWorldPolicyInferExample(TypedDict, total=False):
     primary_image: Required[ImageViews]
+    wm_primary_image: NotRequired[FrameArray]
     lang: Required[str]
     embodiment_id: Required[int]
     action_hz: Required[float]

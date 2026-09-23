@@ -7,6 +7,7 @@ endpoints (e.g., JSONL local logs, Weights & Biases).
 
 from typing import Tuple
 from numbers import Number
+import os
 import re
 import json
 import numpy as np
@@ -474,10 +475,26 @@ class TrainerUtils:
         if (not dist.is_initialized()) or dist.get_rank() == 0:
             print(f"📦 relaxed finetune init checkpoint: {checkpoint_path}")
 
+        checkpoint_lock = None
         try:
+            if dist.is_initialized() and dist.get_world_size() > 1:
+                import fcntl
+                import hashlib
+
+                lock_dir = os.environ.get("LAWAM_CKPT_LOAD_LOCK_DIR", "/tmp/lawam_ckpt_load_locks")
+                os.makedirs(lock_dir, exist_ok=True)
+                lock_name = hashlib.sha1(os.path.abspath(checkpoint_path).encode("utf-8")).hexdigest()
+                checkpoint_lock = open(os.path.join(lock_dir, f"{lock_name}.lock"), "w")
+                fcntl.flock(checkpoint_lock, fcntl.LOCK_EX)
             checkpoint = torch.load(checkpoint_path, map_location="cpu")
         except Exception as e:
             raise RuntimeError(f"❌ loading checkpoint failed: {e}") from e
+        finally:
+            if checkpoint_lock is not None:
+                import fcntl
+
+                fcntl.flock(checkpoint_lock, fcntl.LOCK_UN)
+                checkpoint_lock.close()
 
         if not isinstance(checkpoint, dict):
             raise RuntimeError(

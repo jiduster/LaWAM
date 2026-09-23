@@ -20,6 +20,7 @@ class LatentWorldPolicyInferBatchBuilder:
     _ALLOWED_INFER_KEYS = {
         "lang",
         "primary_image",
+        "wm_primary_image",
         "action_hz",
         "embodiment_id",
         "state",
@@ -84,6 +85,7 @@ class LatentWorldPolicyInferBatchBuilder:
 
             instruction = str(ex["lang"])
             primary_frames = self._extract_primary_frames(ex["primary_image"], ex_idx=ex_idx)
+            wm_primary_frame = self._extract_wm_primary_frame(ex, primary_frames, ex_idx=ex_idx)
             wrist_frames = self._extract_wrist_frames(ex)
 
             action_hz = float(ex["action_hz"])
@@ -133,6 +135,11 @@ class LatentWorldPolicyInferBatchBuilder:
                 )
                 for primary_frame in primary_frames
             ]
+            processed_wm_primary_frame_uint8 = prepare_frame_spatial_uint8(
+                wm_primary_frame,
+                target_hw=self.infer_image_hw,
+                apply_center_crop_90=self.enable_primary_random_resized_crop,
+            )
             processed_wrist_pils = [
                 self._chw_uint8_to_pil(
                     prepare_frame_spatial_uint8(
@@ -149,7 +156,7 @@ class LatentWorldPolicyInferBatchBuilder:
                 for processed_primary_frame_uint8 in processed_primary_frames_uint8
             ])
             wrist_image_views_batch.append(processed_wrist_pils)
-            primary_image_tensors.append(processed_primary_frames_uint8[0].to(dtype=torch.float32).div_(255.0))
+            primary_image_tensors.append(processed_wm_primary_frame_uint8.to(dtype=torch.float32).div_(255.0))
             instructions.append(instruction)
             embodiment_ids.append(embodiment_id)
             action_hz_list.append(action_hz)
@@ -214,6 +221,17 @@ class LatentWorldPolicyInferBatchBuilder:
                 )
             primary_frames.append(primary_frame)
         return primary_frames
+
+    @staticmethod
+    def _extract_wm_primary_frame(ex, primary_frames: list[np.ndarray], *, ex_idx: int) -> np.ndarray:
+        if "wm_primary_image" not in ex or ex["wm_primary_image"] is None:
+            return primary_frames[0]
+        wm_primary_frame = ex["wm_primary_image"]
+        if not isinstance(wm_primary_frame, np.ndarray):
+            raise ValueError(
+                f"examples[{ex_idx}]['wm_primary_image'] must be np.ndarray, got type={type(wm_primary_frame)}."
+            )
+        return wm_primary_frame
 
     @staticmethod
     def _extract_wrist_frames(ex) -> list[np.ndarray]:

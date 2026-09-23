@@ -136,6 +136,7 @@ class LatentWorldTrainCollator:
 
         for sample in features:
             primary_videos = sample["primary_videos"].contiguous()
+            wm_primary_video = sample.get("wm_primary_video", primary_videos[0]).contiguous()
             wrist_images = sample["wrist_images"].contiguous()
             state_tensor = sample["state"].to(dtype=torch.float32).contiguous()
             action_tensor = sample["action"].to(dtype=torch.float32).contiguous()
@@ -145,18 +146,23 @@ class LatentWorldTrainCollator:
             action_hz = float(sample["action_hz"])
 
             processed_primary_videos = primary_videos
+            processed_wm_primary_video = wm_primary_video
             processed_wrist_images = wrist_images
             if self.training and (self.enable_primary_random_resized_crop or self.enable_primary_video_aug):
-                processed_primary_videos, processed_wrist_images = self._augment_primary_and_wrist_views(
-                    primary_videos=primary_videos,
+                # Apply the same spatial/color augmentation to VLM primary views,
+                # the WM primary view, and wrist views so their geometry remains aligned.
+                augmented_primary_videos, processed_wrist_images = self._augment_primary_and_wrist_views(
+                    primary_videos=torch.cat([primary_videos, wm_primary_video.unsqueeze(0)], dim=0),
                     wrist_images=wrist_images,
                     enable_random_resized_crop=self.enable_primary_random_resized_crop,
                     enable_color_jitter=self.enable_primary_video_aug,
                 )
+                processed_primary_videos = augmented_primary_videos[:-1].contiguous()
+                processed_wm_primary_video = augmented_primary_videos[-1].contiguous()
 
             image_views_batch.append(self._to_primary_view_list(processed_primary_videos))
             wrist_image_views_batch.append(self._to_wrist_view_list(processed_wrist_images))
-            primary_video_uint8_seqs.append(processed_primary_videos[0].contiguous())
+            primary_video_uint8_seqs.append(processed_wm_primary_video.contiguous())
             instructions.append(instruction)
             actions_list.append(action_tensor)
             states_list.append(state_tensor)

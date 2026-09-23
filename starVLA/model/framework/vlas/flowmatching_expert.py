@@ -191,6 +191,7 @@ class ConditionalFlowMatchingConfig:
     noise_beta_beta: float = 1.0
     noise_s: float = 0.999
     token_independent_noise: bool = False
+    action_loss_weights: Optional[Tuple[float, ...]] = None
 
 
 class ConditionalFlowMatchingHead(nn.Module):
@@ -560,6 +561,20 @@ class ConditionalFlowMatchingHead(nn.Module):
         pred_velocity = pred_velocity_all[:, -actions.shape[1] :, :]
         loss_elem = F.mse_loss(pred_velocity, velocity_target, reduction="none")
         valid = actions_mask_f
+        if self.config.action_loss_weights is not None:
+            action_loss_weights = torch.as_tensor(
+                self.config.action_loss_weights,
+                device=device,
+                dtype=model_dtype,
+            )
+            if action_loss_weights.ndim != 1 or int(action_loss_weights.numel()) != int(actions.shape[-1]):
+                raise ValueError(
+                    "`flow_cfg.action_loss_weights` must be a 1D sequence with length matching "
+                    f"action_dim={int(actions.shape[-1])}, got shape={tuple(action_loss_weights.shape)}."
+                )
+            if torch.any(action_loss_weights < 0):
+                raise ValueError("`flow_cfg.action_loss_weights` must be non-negative.")
+            valid = valid * action_loss_weights.view(1, 1, -1)
         robot_valid = (embodiment_id.to(device=device, dtype=torch.long) != 0).to(dtype=model_dtype)
         valid = valid * robot_valid.view(-1, 1, 1)
         denom = valid.sum().clamp_min(1.0)

@@ -1,0 +1,127 @@
+run_id: robocasa365_panda_pick_place_sink_to_counter_h4_action_head_weighted
+run_root_dir: /mnt/ceph3/zyh/lawam_checkpoints/robocasa365_panda_pick_place_action_head
+seed: 2026
+trackers:
+- wandb
+wandb_entity: null
+wandb_project: finetune-RoboCasa365-Panda-PickPlace
+is_debug: false
+framework:
+  name: LaWAM
+  qwenvl:
+    base_vlm: results/Checkpoints/qwen3_weights
+  action_model:
+    future_action_window_size: 3
+    past_action_window_size: 0
+    action_horizon: 4
+    lam_ckpt_path: latent_action_model/logs/dino_large_vae/lam_release/checkpoints/pytorch_model.pt
+    lam_yaml_path: latent_action_model/logs/dino_large_vae/lam_release/dino_large_vae.yaml
+    num_action_queries: 8
+    flow_action_num_queries: 8
+    perceptual_weight: 0.0
+    latent_action_placeholder_token: <ACT_PH>
+    flow_only_mode: false
+    enable_flow_h_t1_scheduled_sampling: false
+    flow_h_t1_pred_prob_start: 0.0
+    flow_h_t1_pred_prob_end: 1.0
+    flow_h_t1_pred_ramp_steps: 10000
+    detach_future_feature: true
+    future_prediction: true
+    enable_loss_distill: false
+    lam_encoder_distill_weight: 0.0
+    repeated_diffusion_steps: 2
+    flow_cfg:
+      action_dim: 12
+      state_dim: 16
+      use_state: true
+      vlm_dim: 2048
+      hidden_dim: 1024
+      attention_heads: 16
+      num_layers: 16
+      num_target_vision_tokens: -1
+      interleave_self_attention: true
+      use_alternate_vldit: true
+      attend_text_every_n_blocks: 2
+      cfg_drop_prob: 0.0
+      cfg_guidance_scale: 1.0
+      num_inference_steps: 10
+      num_timestep_buckets: 1000
+      horizon_sec: 0.2
+      noise_beta_alpha: 1.5
+      noise_beta_beta: 1.0
+      noise_s: 0.999
+      token_independent_noise: false
+      use_action_positional_embeddings: true
+      # PandaOmron action order:
+      # [eef_pos(3), eef_rot(3), gripper_close(1), base_motion(4), control_mode(1)]
+      action_loss_weights:
+      - 4.0
+      - 4.0
+      - 4.0
+      - 2.0
+      - 2.0
+      - 2.0
+      - 1.0
+      - 0.1
+      - 0.1
+      - 0.1
+      - 0.1
+      - 0.1
+datasets:
+  vla_data:
+    data_root_dir: /mnt/ceph3/dexwm/robocasa365-datasets
+    data_mix: robocasa365_panda_pick_place_sink_to_counter
+    image_resolution: 256
+    per_device_batch_size: 8
+    val_tail_ratio: 0.02
+    num_frames: 2
+    sec_chunk: 0.2
+    action_horizon: 4
+    stats_sample_rows_per_episode: 256
+    enable_video_frame_cache: false
+    video_backend: pyav
+trainer:
+  max_train_steps: 5000
+  num_warmup_steps: 200
+  save_interval: 2500
+  eval_interval: 250
+  eval_batches: 20
+  learning_rate:
+    base: 1.0e-04
+    action_model:
+      lr: 2.0e-04
+      modules:
+      - policy_backend.flow
+    world_model:
+      lr: 0.0
+      modules:
+      - policy_backend.lam.decoder
+    vlm:
+      lr: 0.0
+      modules:
+      - policy_backend.vlm
+  lr_scheduler_type: cosine_with_min_lr
+  scheduler_specific_kwargs:
+    min_lr: 2.0e-05
+  freeze:
+    freeze_vision_backbone: true
+    freeze_llm_backbone: true
+    keep_llm_first_n_layers: 16
+    freeze_last_llm_layer: true
+    freeze_embedding: true
+    unfreeze_vision_merger: false
+    unfreeze_llm_last_n_layers: 0
+    unfreeze_lam_decoder: false
+  logging_frequency: 100
+  gradient_clipping: 1.0
+  gradient_accumulation_steps: 1
+  ddp_find_unused_parameters: false
+  optimizer:
+    betas:
+    - 0.9
+    - 0.95
+    eps: 1.0e-08
+    weight_decay: 1.0e-08
+  pretrained_checkpoint: /mnt/ceph3/zyh/lawam_checkpoints/robocasa365_panda_pick_place/20260705_004548+robocasa365_panda_pick_place_sink_to_counter_h4_continue_from_7500/final_model/pytorch_model.pt
+  load_pretrained_policy_flow: true
+  use_pretrained_dataset_statistics: false

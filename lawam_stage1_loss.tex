@@ -1,0 +1,261 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,booktabs,enumitem,hyperref}
+
+\title{LaWAM 第一阶段 LAM 损失设计}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{目标与总损失}
+
+第一阶段训练 Latent Action Model（LAM）：模型从两帧视觉观测中提取低维 latent action，并用它重建未来帧的 DINO patch feature。
+
+\begin{equation*}
+\text{video}_{0:T-1}
+\rightarrow \text{DINO features}
+\rightarrow \text{LAM encoder}
+\rightarrow z
+\rightarrow \text{LAM decoder}
+\rightarrow \widehat{h}_{t+1}.
+\end{equation*}
+
+默认 $T=2$、latent dimension 为 $32$。总损失为
+
+\begin{equation}
+\mathcal{L}_{\mathrm{total}}
+=\mathcal{L}_{\mathrm{recon}}
++\lambda_{\mathrm{div}}\mathcal{L}_{\mathrm{entropy}}
++\mathcal{L}_{\mathrm{VQ/VAE}}
++\lambda_{\mathrm{aux}}\mathcal{L}_{\mathrm{state}}.
+\end{equation}
+
+\section{DINO feature reconstruction loss}
+
+DINO encoder 取倒数第二层 \texttt{hidden\_states[-2]}，删除前 5 个特殊 token，保留 spatial patch tokens。对于 $256\times256$ 图像和 patch size $16$，每帧包含 $16\times16=256$ 个 patch token。
+
+当前配置启用
+
+\begin{verbatim}
+norm_latents: true
+norm_latents_type: "ln"
+\end{verbatim}
+
+因此每个 DINO patch token 都经过无 affine 参数的 LayerNorm。decoder 预测下一帧 feature $\widehat{h}_{t+1}$，目标为真实下一帧 feature $h_{t+1}$。
+
+代码支持以下重建损失：
+
+\begin{align*}
+\mathcal{L}_{\mathrm{L1}}
+&=\operatorname{mean}|\widehat{h}_{t+1}-h_{t+1}|,\\
+\mathcal{L}_{\mathrm{L2}}
+&=\operatorname{mean}(\widehat{h}_{t+1}-h_{t+1})^2,\\
+\mathcal{L}_{\mathrm{SmoothL1}}
+&=\operatorname{SmoothL1}(\widehat{h}_{t+1},h_{t+1};\beta=0.1),\\
+\mathcal{L}_{\mathrm{cos}}
+&=\mathcal{L}_{\mathrm{SmoothL1}}
++1-\operatorname{mean}[\cos(\widehat{h}_{t+1},h_{t+1})].
+\end{align*}
+
+当前配置如下：
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+配置 & \texttt{loss\_type} & 实际损失 \\
+\midrule
+\texttt{dino\_large\_vae.yaml} & \texttt{smooth\_l1} & Smooth L1，$\beta=0.1$ \\
+\texttt{dino\_base\_vae.yaml} & \texttt{l2} & MSE \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+代码额外记录 cosine similarity 和 L1 error，但它们默认只是监控指标，不参与反向传播。
+
+\section{VAE bottleneck 与 KL loss}
+
+当前配置使用
+
+\begin{verbatim}
+vq_type: "vae"
+vq_kwargs:
+  layer_norm: true
+\end{verbatim}
+
+LAM encoder 输出 $n$ 后，VAE 计算
+
+\begin{equation*}
+\mu=W_\mu(\operatorname{LN}(n)),\qquad
+\log\sigma^2=W_{\log\sigma^2}(\operatorname{LN}(n)),
+\end{equation*}
+
+并在训练时采样
+
+\begin{equation*}
+z=\mu+\epsilon\odot\sigma,
+\qquad \epsilon\sim\mathcal{N}(0,I).
+\end{equation*}
+
+KL loss 为
+
+\begin{equation}
+\mathcal{L}_{\mathrm{KL}}
+=\frac{1}{2}\operatorname{mean}_B
+\sum_i\left(\mu_i^2+\exp(\log\sigma_i^2)-1-\log\sigma_i^2\right).
+\end{equation}
+
+实际加入总损失的是
+
+\begin{equation}
+\mathcal{L}_{\mathrm{VAE}}=\beta\mathcal{L}_{\mathrm{KL}},
+\qquad \beta=5\times10^{-5}\quad\text{（代码默认值）}.
+\end{equation}
+
+因此 KL 正则通常远小于 reconstruction loss。VAE 模式没有离散 codebook assignment；代码中的 \texttt{vq\_loss} 在这里实际表示加权后的 KL loss。
+
+\section{离散 VQ loss（当前配置不生效）}
+
+只有将 \texttt{vq\_type} 设为 \texttt{vq}、\texttt{nsvq} 或 \texttt{ema} 时，才会使用离散 VQ。令 encoder 输出为 $z_e$，最近的 codebook vector 为 $e_k$：
+
+\begin{align*}
+\mathcal{L}_{\mathrm{codebook}}
+&=\|e_k-\operatorname{sg}(z_e)\|_2^2,\\
+\mathcal{L}_{\mathrm{commit}}
+&=\|\operatorname{sg}(e_k)-z_e\|_2^2.
+\end{align*}
+
+普通 VQ 的组合形式为
+
+\begin{equation*}
+\mathcal{L}_{\mathrm{VQ}}
+=\mathcal{L}_{\mathrm{codebook}}
++\beta\mathcal{L}_{\mathrm{commit}}
++\lambda_{\mathrm{orth}}\mathcal{L}_{\mathrm{orth}}.
+\end{equation*}
+
+量化结果使用 straight-through estimator，使 reconstruction gradient 能回传给 encoder。当前 \texttt{vq\_type: vae}，所以这些离散 VQ 项均不生效。
+
+\section{Entropy / diversity loss}
+
+离散 VQ 模式下，代码计算单样本 assignment entropy 和整个 batch 的 codebook entropy：
+
+\begin{equation*}
+\mathcal{L}_{\mathrm{entropy}}
+=\lambda_{\mathrm{sample}}H_{\mathrm{sample}}
+-\lambda_{\mathrm{codebook}}H_{\mathrm{codebook}}.
+\end{equation*}
+
+其作用是降低单样本 assignment 的不确定性，同时避免整个数据集只使用少量 code。
+
+当前配置为
+
+\begin{verbatim}
+vq_type: "vae"
+lambda_diversity: 0.0
+\end{verbatim}
+
+所以该项恒为零，不影响当前训练。
+
+\section{状态变化辅助损失}
+
+数据中的状态变化定义为
+
+\begin{equation*}
+\Delta s=s_{\mathrm{end}}-s_{\mathrm{start}}.
+\end{equation*}
+
+StatePredictor 根据 latent action $z$、初始状态 $s_0$ 和 embodiment id 预测 $\widehat{\Delta s}$。输出经过 $\tanh$，范围为 $[-1,1]$。
+
+状态损失支持 L1 和 L2：
+
+\begin{align*}
+\mathcal{L}_{\mathrm{state,L1}}
+&=\frac{\sum m|\widehat{\Delta s}-\Delta s|}{\sum m},\\
+\mathcal{L}_{\mathrm{state,L2}}
+&=\frac{\sum m(\widehat{\Delta s}-\Delta s)^2}{\sum m},
+\end{align*}
+
+其中 $m$ 是 state mask，用来忽略 padding 和无效状态维度。
+
+large 配置为
+
+\begin{verbatim}
+state_loss_type: "l2"
+lambda_aux: 1.0
+\end{verbatim}
+
+状态损失只对 \texttt{embodiment\_id != 0} 的 robot 样本计算；human 样本跳过该项。
+
+\section{当前 large 配置的实际目标}
+
+\texttt{dino\_large\_vae.yaml} 的关键配置为
+
+\begin{verbatim}
+loss_type: "smooth_l1"
+state_loss_type: "l2"
+lambda_aux: 1.0
+lambda_diversity: 0.0
+vq_type: "vae"
+vq_kwargs:
+  layer_norm: true
+\end{verbatim}
+
+所以实际损失为
+
+\begin{equation}
+\boxed{
+\mathcal{L}_{\mathrm{total}}
+=\mathcal{L}_{\mathrm{SmoothL1}}(\widehat{h}_{t+1},h_{t+1})
++\mathcal{L}_{\mathrm{state,L2}}
++5\times10^{-5}\mathcal{L}_{\mathrm{KL}}
+}
+\end{equation}
+
+其中状态项只对 robot 样本的有效状态维度生效。
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+损失项 & 当前是否生效 & 说明 \\
+\midrule
+DINO reconstruction & 是 & Smooth L1，$\beta=0.1$ \\
+VAE KL & 是 & 默认权重 $5\times10^{-5}$ \\
+State auxiliary & 有条件 & 仅 robot 样本和有效状态维度 \\
+Entropy/diversity & 否 & 权重为零，且 VAE 返回零 \\
+离散 VQ loss & 否 & 当前使用 VAE \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{双视图增强}
+
+large 配置还启用了
+
+\begin{verbatim}
+image_aug: true
+dual_view_aug: true
+\end{verbatim}
+
+训练时 encoder 和 decoder target 可以来自同一视频的两套独立增强视图：
+
+\begin{equation*}
+\text{view}_1\rightarrow\text{LAM encoder},\qquad
+\text{view}_2\rightarrow\text{decoder input and target}.
+\end{equation*}
+
+增强包括 RandomResizedCrop 和 ColorJitter。因此模型同时被要求学习一定的视觉增强不变性；这会增加逐 patch feature reconstruction 的难度，也可能提高该损失的可达到下限。
+
+\section{相关实现文件}
+
+\begin{itemize}[nosep]
+  \item 总损失与 reconstruction loss：\texttt{latent\_action\_model/core/lam\_lightinng.py}
+  \item LAM 数据流与目标 feature：\texttt{latent\_action\_model/core/lam\_model.py}
+  \item DINO feature 提取：\texttt{latent\_action\_model/core/vjepa\_encoder.py}
+  \item VAE、VQ、entropy loss：\texttt{latent\_action\_model/core/vq.py}
+  \item 状态辅助损失：\texttt{latent\_action\_model/core/utils/utils.py}
+  \item 当前配置：\texttt{latent\_action\_model/config/dino\_large\_vae.yaml}
+\end{itemize}
+
+\end{document}

@@ -52,7 +52,10 @@ from starVLA.dataloader.gr00t_lerobot.embodiment_tags import EMBODIMENT_TAG_MAPP
 from starVLA.dataloader.gr00t_lerobot.schema import (
     DatasetMetadata,
     DatasetStatisticalValues,
+    LeRobotActionMetadata,
+    LeRobotModalityField,
     LeRobotModalityMetadata,
+    LeRobotStateMetadata,
     LeRobotStateActionMetadata,
 )
 from starVLA.dataloader.gr00t_lerobot.transform import ComposedModalityTransform
@@ -75,6 +78,130 @@ VIDEO_FRAME_CACHE_MANIFEST_FILENAME = "manifest.json"
 VIDEO_FRAME_CACHE_SCHEMA_VERSION = 2
 DEFAULT_VIDEO_CACHE_BUILD_WORKERS = 8
 DATASET_STAT_FIELDS = ("mean", "std", "min", "max", "q01", "q99")
+
+
+def _is_wrist_video_key(key: str) -> bool:
+    key_l = str(key).lower()
+    return "wrist" in key_l or "eye_in_hand" in key_l or "eye-in-hand" in key_l
+
+
+def _normalize_lerobot_video_key(feature_key: str) -> str:
+    """Map raw LeRobot feature names to compact transform keys."""
+    key = str(feature_key).strip()
+    for prefix in ("observation.images.", "video.", "observation.", "images."):
+        if key.startswith(prefix):
+            key = key[len(prefix) :]
+            break
+    if "." in key:
+        key = key.rsplit(".", 1)[-1]
+    return key
+
+
+def _build_fallback_lerobot_modality_meta(dataset_path: Path) -> LeRobotModalityMetadata:
+    """Build minimal LeRobot modality metadata from info.json when modality.json is missing."""
+    info_path = Path(dataset_path) / LE_ROBOT_INFO_FILENAME
+    if not info_path.exists():
+        raise FileNotFoundError(f"Missing LeRobot info file: {info_path}")
+
+    with open(info_path, "r", encoding="utf-8") as f:
+        info = json.load(f)
+
+    features = info.get("features", {})
+    if not isinstance(features, dict):
+        raise ValueError(f"Invalid LeRobot info schema in {info_path}: `features` must be a dict.")
+
+    state_meta: dict[str, LeRobotStateMetadata] = {}
+    action_meta: dict[str, LeRobotActionMetadata] = {}
+    video_meta: dict[str, LeRobotModalityField] = {}
+    annotation_meta: dict[str, LeRobotModalityField] = {}
+
+    video_feature_names = [
+        feature_name
+        for feature_name, feature_info in features.items()
+        if isinstance(feature_info, dict) and feature_info.get("dtype") == "video"
+    ]
+    non_wrist_video_names = [name for name in video_feature_names if not _is_wrist_video_key(name)]
+    wrist_video_names = [name for name in video_feature_names if _is_wrist_video_key(name)]
+    looks_bimanual = len(wrist_video_names) >= 2 or any(
+        ("left" in name.lower() or "right" in name.lower()) for name in wrist_video_names
+    )
+
+    def _pick_source(candidates: list[str], fallback: str | None = None) -> str:
+        if candidates:
+            return candidates[0]
+        if fallback is not None:
+            return fallback
+        raise ValueError("Unable to infer a source feature for fallback video metadata.")
+
+    if video_feature_names:
+        primary_source = _pick_source(non_wrist_video_names, fallback=video_feature_names[0])
+        if looks_bimanual:
+            left_source = next((name for name in wrist_video_names if "left" in name.lower()), None)
+            right_source = next((name for name in wrist_video_names if "right" in name.lower()), None)
+            if left_source is None:
+                left_source = _pick_source(wrist_video_names, fallback=primary_source)
+            if right_source is None or right_source == left_source:
+                right_source = next((name for name in wrist_video_names if name != left_source), None)
+            if right_source is None:
+                raise ValueError(
+                    f"Could not infer distinct left/right wrist cameras from `{dataset_path}`: "
+                    f"{video_feature_names}"
+                )
+            video_meta["primary_view"] = LeRobotModalityField(original_key=primary_source)
+            video_meta["wrist_left"] = LeRobotModalityField(original_key=left_source)
+            video_meta["wrist_right"] = LeRobotModalityField(original_key=right_source)
+        else:
+            wrist_source = _pick_source(wrist_video_names, fallback=video_feature_names[min(1, len(video_feature_names) - 1)])
+            video_meta["primary_view"] = LeRobotModalityField(original_key=primary_source)
+            video_meta["wrist_view"] = LeRobotModalityField(original_key=wrist_source)
+
+    for feature_name, feature_info in features.items():
+        if not isinstance(feature_info, dict):
+            continue
+
+        dtype = feature_info.get("dtype")
+        shape = feature_info.get("shape", [])
+
+        if feature_name == "observation.state":
+            state_dim = int(shape[0]) if shape else 0
+            state_meta["proprio"] = LeRobotStateMetadata(
+                start=0,
+                end=state_dim,
+                absolute=True,
+                dtype=str(dtype or "float32"),
+                original_key=feature_name,
+            )
+            continue
+
+        if feature_name == "action":
+            action_dim = int(shape[0]) if shape else 0
+            action_meta["proprio"] = LeRobotActionMetadata(
+                start=0,
+                end=action_dim,
+                absolute=True,
+                dtype=str(dtype or "float32"),
+                original_key=feature_name,
+            )
+            continue
+
+        if feature_name == "task_index":
+            annotation_meta["human.task_description"] = LeRobotModalityField(original_key=feature_name)
+
+    if not state_meta:
+        raise ValueError(f"Could not infer state metadata from {info_path}.")
+    if not action_meta:
+        raise ValueError(f"Could not infer action metadata from {info_path}.")
+    if not video_meta:
+        raise ValueError(f"Could not infer video metadata from {info_path}.")
+    if not annotation_meta:
+        annotation_meta["human.task_description"] = LeRobotModalityField(original_key="task_index")
+
+    return LeRobotModalityMetadata(
+        state=state_meta,
+        action=action_meta,
+        video=video_meta,
+        annotation=annotation_meta,
+    )
 
 
 def _is_main_process() -> bool:
@@ -579,14 +706,14 @@ class LeRobotSingleDataset(Dataset):
                             used_keys[modality].add(full_key)
 
         # 1. Modality metadata
-        modality_meta_path = self.dataset_path / LE_ROBOT_MODALITY_FILENAME
-        assert (
-            modality_meta_path.exists()
-        ), f"Please provide a {LE_ROBOT_MODALITY_FILENAME} file in {self.dataset_path}"
-        # 1.1. State and action modalities
         simplified_modality_meta: dict[str, dict] = {}
-        with open(modality_meta_path, "r") as f:
-            le_modality_meta = LeRobotModalityMetadata.model_validate(json.load(f))
+        modality_meta_path = self.dataset_path / LE_ROBOT_MODALITY_FILENAME
+        if modality_meta_path.exists():
+            with open(modality_meta_path, "r", encoding="utf-8") as f:
+                le_modality_meta = LeRobotModalityMetadata.model_validate(json.load(f))
+        else:
+            le_modality_meta = _build_fallback_lerobot_modality_meta(self.dataset_path)
+        # 1.1. State and action modalities
         for modality in ["state", "action"]:
             simplified_modality_meta[modality] = {}
             
@@ -664,6 +791,7 @@ class LeRobotSingleDataset(Dataset):
             return (not dist.is_initialized()) or dist.get_rank() == 0
         
         stats_path = self.dataset_path / LE_ROBOT_STATS_FILENAME
+        fallback_stats_path = self.dataset_path / "meta" / "stats.json"
         tmp_path = stats_path.with_suffix(".tmp")
         
         # ---------- all rank try to read ----------
@@ -675,9 +803,10 @@ class LeRobotSingleDataset(Dataset):
                     f"{self.dataset_name} and overwriting {stats_path}"
                 )
         else:
-            if stats_path.exists():
+            read_stats_path = stats_path if stats_path.exists() else fallback_stats_path
+            if read_stats_path.exists():
                 try:
-                    with open(stats_path, "r") as f:
+                    with open(read_stats_path, "r") as f:
                         le_statistics = json.load(f)
                     for stat in le_statistics.values():
                         DatasetStatisticalValues.model_validate(stat)
@@ -725,7 +854,9 @@ class LeRobotSingleDataset(Dataset):
                 state_action_meta = le_modality_meta.get_key_meta(f"{our_modality}.{subkey}")
                 assert isinstance(state_action_meta, LeRobotStateActionMetadata)
                 le_modality = state_action_meta.original_key
-                for stat_name in le_statistics[le_modality]:
+                for stat_name in DATASET_STAT_FIELDS:
+                    if stat_name not in le_statistics[le_modality]:
+                        continue
                     indices = np.arange(
                         state_action_meta.start,
                         state_action_meta.end,
@@ -1062,12 +1193,10 @@ class LeRobotSingleDataset(Dataset):
     def _get_lerobot_modality_meta(self) -> LeRobotModalityMetadata:
         """Get the metadata for the LeRobot dataset."""
         modality_meta_path = self.dataset_path / LE_ROBOT_MODALITY_FILENAME
-        assert (
-            modality_meta_path.exists()
-        ), f"Please provide a {LE_ROBOT_MODALITY_FILENAME} file in {self.dataset_path}"
-        with open(modality_meta_path, "r") as f:
-            modality_meta = LeRobotModalityMetadata.model_validate(json.load(f))
-        return modality_meta
+        if modality_meta_path.exists():
+            with open(modality_meta_path, "r", encoding="utf-8") as f:
+                return LeRobotModalityMetadata.model_validate(json.load(f))
+        return _build_fallback_lerobot_modality_meta(self.dataset_path)
 
     def _get_lerobot_info_meta(self) -> dict:
         """Get the metadata for the LeRobot dataset."""
@@ -1089,7 +1218,7 @@ class LeRobotSingleDataset(Dataset):
         return self.lerobot_info_meta["chunks_size"]
 
     def _load_episodes_hf(self) -> None:
-        """Official LeRobot v3.0: load episode metadata as HuggingFace Dataset."""
+        """Load episode metadata from LeRobot v3 parquet or v2.1 jsonl."""
         episodes_dir = self.dataset_path / "meta" / "episodes"
         paths = sorted(episodes_dir.glob("*/*.parquet"))
         # if not paths:
@@ -1108,7 +1237,41 @@ class LeRobotSingleDataset(Dataset):
         
         # paths = sorted(paths, key=_parse_path_indices)
         
-        self.episodes_hf = HFDataset.from_parquet([str(p) for p in paths])
+        if paths:
+            self.episodes_hf = HFDataset.from_parquet([str(p) for p in paths])
+        else:
+            episodes_jsonl = self.dataset_path / "meta" / "episodes.jsonl"
+            if not episodes_jsonl.exists():
+                raise FileNotFoundError(
+                    f"No episode metadata found. Expected parquet files in {episodes_dir} "
+                    f"or jsonl file {episodes_jsonl}."
+                )
+            episode_rows = []
+            dataset_from_index = 0
+            with open(episodes_jsonl, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    episode_index = int(row["episode_index"])
+                    length = int(row["length"])
+                    episode_chunk = episode_index // int(self.chunk_size)
+                    row.setdefault("dataset_from_index", dataset_from_index)
+                    row.setdefault("dataset_to_index", dataset_from_index + length)
+                    row.setdefault("data/chunk_index", episode_chunk)
+                    row.setdefault("data/file_index", episode_index)
+                    for video_key, video_meta in self.lerobot_modality_meta.video.items():
+                        original_key = video_meta.original_key or video_key
+                        row.setdefault(f"videos/{original_key}/chunk_index", episode_chunk)
+                        row.setdefault(f"videos/{original_key}/file_index", episode_index)
+                        row.setdefault(f"videos/{original_key}/from_timestamp", 0.0)
+                    episode_rows.append(row)
+                    dataset_from_index += length
+
+            if not episode_rows:
+                raise ValueError(f"No episode rows found in {episodes_jsonl}.")
+            self.episodes_hf = HFDataset.from_pandas(pd.DataFrame(episode_rows), preserve_index=False)
         # Drop stats/ columns like official load_episodes
         cols = [k for k in self.episodes_hf.column_names if not k.startswith("stats/")]
         self.episodes_hf = self.episodes_hf.select_columns(cols)
@@ -1148,7 +1311,15 @@ class LeRobotSingleDataset(Dataset):
     def _get_tasks(self) -> pd.DataFrame:
         """Get the tasks for the dataset."""
         tasks_path = self.dataset_path / LE_ROBOT_TASKS_FILENAME
-        df = pd.read_parquet(tasks_path)
+        if tasks_path.exists():
+            df = pd.read_parquet(tasks_path)
+        else:
+            tasks_jsonl = self.dataset_path / "meta" / "tasks.jsonl"
+            if not tasks_jsonl.exists():
+                raise FileNotFoundError(
+                    f"No task metadata found. Expected {tasks_path} or {tasks_jsonl}."
+                )
+            df = pd.read_json(tasks_jsonl, lines=True)
         if "task_index" not in df.columns:
             index_name = df.index.name if df.index.name is not None else "index"
             df = df.reset_index().rename(columns={index_name: "task_index"})
@@ -1511,12 +1682,15 @@ class LeRobotSingleDataset(Dataset):
         # Always use mapping to find correct row
         row_idx = self._episode_index_to_row[trajectory_id]
         ep = self.episodes_hf[row_idx]
-        vid_chunk_index = int(ep[f"videos/{original_key}/chunk_index"])
-        vid_file_index = int(ep[f"videos/{original_key}/file_index"])
+        episode_index = int(ep.get("episode_index", trajectory_id))
+        vid_chunk_index = int(ep.get(f"videos/{original_key}/chunk_index", episode_index // int(self.chunk_size)))
+        vid_file_index = int(ep.get(f"videos/{original_key}/file_index", episode_index))
         video_filename = self.video_path_pattern.format(
             video_key=original_key,
             chunk_index=vid_chunk_index,
             file_index=vid_file_index,
+            episode_chunk=vid_chunk_index,
+            episode_index=episode_index,
         )
         return self.dataset_path / video_filename
 
@@ -1543,7 +1717,7 @@ class LeRobotSingleDataset(Dataset):
             raise ValueError(f"Empty delta_indices for video key={key} in dataset={self.dataset_name}.")
         # Wrist stream is consumed as a static image: decode only the chunk initial frame.
         # This keeps wrist decoding independent from `num_frames`.
-        if "wrist" in key.lower():
+        if _is_wrist_video_key(key):
             delta = delta[:1]
         step_indices = delta + int(base_index)
         step_indices = np.clip(step_indices, 0, self._curr_length - 1)
@@ -2220,7 +2394,7 @@ class CachedLeRobotSingleDataset(LeRobotSingleDataset):
             raise ValueError(f"Empty delta_indices for video key={key} in dataset={self.dataset_name}.")
         # Wrist stream is consumed as a static image: decode only the chunk initial frame.
         # This keeps wrist decoding independent from `num_frames`.
-        if "wrist" in key.lower():
+        if _is_wrist_video_key(key):
             delta = delta[:1]
         step_indices = delta + int(base_index)
         trajectory_index = self._cache_traj_id_to_index_all[int(trajectory_id)]
@@ -2599,7 +2773,7 @@ class LeRobotMixtureDataset(Dataset):
         if not self.random_single_non_wrist_view or len(all_video_keys) <= 1:
             return all_video_keys
 
-        non_wrist_keys = [k for k in all_video_keys if "wrist" not in k.lower()]
+        non_wrist_keys = [k for k in all_video_keys if not _is_wrist_video_key(k)]
         if len(non_wrist_keys) <= 1:
             return all_video_keys
 
@@ -2607,7 +2781,7 @@ class LeRobotMixtureDataset(Dataset):
         chosen_non_wrist = non_wrist_keys[int(rng.integers(0, len(non_wrist_keys)))]
         selected_keys = {chosen_non_wrist}
         for key in all_video_keys:
-            if "wrist" in key.lower():
+            if _is_wrist_video_key(key):
                 selected_keys.add(key)
         # Preserve original key order from modality config.
         return [k for k in all_video_keys if k in selected_keys]
@@ -2684,7 +2858,7 @@ class LeRobotMixtureDataset(Dataset):
         for video_key in selected_video_keys:
             view_frames = data[video_key]
             view_frames = view_frames.contiguous()
-            if "wrist" not in video_key.lower():
+            if not _is_wrist_video_key(video_key):
                 primary_videos.append(view_frames)
             else:
                 wrist_frames.append(view_frames[0].contiguous())

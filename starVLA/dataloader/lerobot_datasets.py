@@ -258,6 +258,19 @@ def get_vla_dataset(
     """
     data_root_dir = data_cfg.data_root_dir
     data_mix = data_cfg.data_mix
+
+    data_mix_str = str(data_mix).strip()
+    if data_mix_str.startswith("dexwm_robocasa"):
+        from starVLA.dataloader.dexwm_robocasa import DexWMRoboCasaDataset
+
+        return DexWMRoboCasaDataset(
+            data_root_dir=Path(data_root_dir),
+            mode=mode,
+            data_cfg=data_cfg,
+            seed=seed,
+            dataset_statistics_override=dataset_statistics_override,
+        )
+
     mixture_spec = DATASET_NAMED_MIXTURES[data_mix]
     included_datasets, filtered_mixture_spec = set(), []
     for d_name, d_weight, robot_type in mixture_spec:  

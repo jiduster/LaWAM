@@ -54,6 +54,14 @@ class EmbodimentTag(Enum):
     """
     The Franka Emika Panda robot.
     """
+    DEXJOCO_SINGLE = "dexjoco_single"
+    """
+    DexJoCo single-arm dexterous manipulation datasets.
+    """
+    DEXJOCO_BIMANUAL = "dexjoco_bimanual"
+    """
+    DexJoCo bimanual dexterous manipulation datasets.
+    """
     FRANKA_FR3_DUAL = 'franka_fr3_dual'
     """
     The Dual Franka Emika Panda robot.
@@ -78,6 +86,8 @@ class EmbodimentTag(Enum):
 EMBODIMENT_TAG_MAPPING = {
     EmbodimentTag.HUMAN.value: 0,
     EmbodimentTag.NEW_EMBODIMENT.value: 31,
+    EmbodimentTag.DEXJOCO_SINGLE.value: 27,
+    EmbodimentTag.DEXJOCO_BIMANUAL.value: 28,
     EmbodimentTag.OXE_DROID.value: 17,
     EmbodimentTag.OXE_BRIDGE.value: 18,
     EmbodimentTag.OXE_RT1.value: 19,
@@ -100,6 +110,8 @@ ROBOT_TYPE_TO_EMBODIMENT_TAG = {
     "demo_sim_franka_delta_joints": EmbodimentTag.FRANKA,
     "custom_robot_config": EmbodimentTag.NEW_EMBODIMENT,
     "fold_towel": EmbodimentTag.NEW_EMBODIMENT,
+    "dexjoco_single": EmbodimentTag.DEXJOCO_SINGLE,
+    "dexjoco_bimanual": EmbodimentTag.DEXJOCO_BIMANUAL,
     "gr1": EmbodimentTag.GR1,
     "gr1_joint_eef": EmbodimentTag.GR1,
     "agibot_genie": EmbodimentTag.AGIBOT_GENIE1,

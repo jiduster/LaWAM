@@ -193,6 +193,7 @@ def build_dataloaders(cfg) -> tuple[DataLoader, Optional[DataLoader]]:
         framework_name=framework_name,
         dataset_statistics_override=dataset_statistics_override,
     )
+    train_dataset_statistics = dataset_statistics_override or vla_train_dataset.build_dataset_statistics()
 
     train_loader_kwargs = {
         "batch_size": batch_size,
@@ -220,7 +221,7 @@ def build_dataloaders(cfg) -> tuple[DataLoader, Optional[DataLoader]]:
             mode="val",
             balance_dataset_weights=balance_dataset_weights,
             framework_name=framework_name,
-            dataset_statistics_override=dataset_statistics_override,
+            dataset_statistics_override=train_dataset_statistics,
         )
         val_loader_kwargs = {
             "batch_size": batch_size,
@@ -240,7 +241,7 @@ def build_dataloaders(cfg) -> tuple[DataLoader, Optional[DataLoader]]:
 
     if (not dist.is_initialized()) or dist.get_rank() == 0:
         output_path = Path(cfg.output_dir) / "dataset_statistics.json"
-        save_dataset_statistics(vla_train_dataset.build_dataset_statistics(), output_path)
+        save_dataset_statistics(train_dataset_statistics, output_path)
     return vla_train_dataloader, vla_val_dataloader
 
 
