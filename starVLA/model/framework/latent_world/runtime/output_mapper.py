@@ -12,6 +12,9 @@ def map_policy_train_output(policy_output: Dict[str, torch.Tensor]) -> Dict[str,
         "loss_perceptual": policy_output["loss_perceptual"],
         "loss_distill": policy_output["loss_distill"],
         "loss_vlm": policy_output["loss_vlm"],
+        "loss_fingertip": policy_output["loss_fingertip"],
+        "fingertip_rmse": policy_output["fingertip_rmse"],
+        "fingertip_rmse_mm": policy_output["fingertip_rmse_mm"],
     }
 
 

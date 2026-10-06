@@ -73,6 +73,13 @@ class LatentWorldPolicyConfig:
     num_action_queries: int = 8
     flow_action_num_queries: int = 8
 
+    # DexJoCo fingertip auxiliary prediction. The head is only constructed when
+    # the loss weight is positive, so existing checkpoints remain compatible.
+    fingertip_loss_weight: float = 0.0
+    fingertip_num_points: int = 8
+    fingertip_target_mode: str = "delta"
+    fingertip_head_hidden_dim: int = 512
+
 
 # ============================================================================
 # Lightweight Blocks
@@ -290,6 +297,26 @@ class LatentWorldPolicyBackend(nn.Module):
             ffn_expansion_factor=4.0,
             dropout=0.0,
         )
+
+        self.fingertip_head: Optional[nn.Module] = None
+        if float(self.model_cfg.fingertip_loss_weight) > 0.0:
+            if int(self.model_cfg.fingertip_num_points) <= 0:
+                raise ValueError("fingertip_num_points must be positive when fingertip loss is enabled.")
+            if str(self.model_cfg.fingertip_target_mode).lower() != "delta":
+                raise ValueError(
+                    "Only fingertip_target_mode='delta' is implemented; absolute targets need separate normalization."
+                )
+            state_dim = int(self.model_cfg.flow_cfg.state_dim)
+            hidden_dim = int(self.model_cfg.fingertip_head_hidden_dim)
+            if hidden_dim <= 0:
+                raise ValueError("fingertip_head_hidden_dim must be positive.")
+            self.fingertip_head = nn.Sequential(
+                nn.Linear(int(self.lam.input_dim) + state_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.GELU(),
+                nn.Linear(hidden_dim, int(self.model_cfg.action_horizon) * int(self.model_cfg.fingertip_num_points) * 3),
+            )
 
         # 4) Align flow config to LAM output dimensions.
         lam_vision_dim = int(self.lam.input_dim)
@@ -529,6 +556,7 @@ class LatentWorldPolicyBackend(nn.Module):
             self.lam,
             self.flow,
             self.vlm_to_lam,
+            self.fingertip_head,
             mode=mode,
         )
 
@@ -605,6 +633,48 @@ class LatentWorldPolicyBackend(nn.Module):
 
     def _prepare_infer_batch(self, *, batch: LatentWorldPolicyInferBatch) -> LatentWorldPolicyInferBatch:
         return batch
+
+    def _compute_fingertip_loss(
+        self,
+        *,
+        h_t1_pred: torch.Tensor,
+        state: torch.Tensor,
+        fingertip_targets: torch.Tensor,
+        fingertip_valid: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.fingertip_head is None:
+            zero = h_t1_pred.new_zeros((), dtype=torch.float32)
+            return zero, zero
+
+        expected_points = int(self.model_cfg.fingertip_num_points)
+        expected_horizon = int(self.model_cfg.action_horizon)
+        if fingertip_targets.ndim != 4 or fingertip_targets.shape[1:] != (expected_horizon, expected_points, 3):
+            raise ValueError(
+                "Invalid fingertip_targets shape: "
+                f"got={tuple(fingertip_targets.shape)}, expected=[B,{expected_horizon},{expected_points},3]."
+            )
+        if fingertip_valid.shape != fingertip_targets.shape[:3]:
+            raise ValueError(
+                "Invalid fingertip_valid shape: "
+                f"got={tuple(fingertip_valid.shape)}, expected={tuple(fingertip_targets.shape[:3])}."
+            )
+
+        # Mean-pool the predicted future LAM tokens and concatenate current state.
+        # This path keeps gradients through VLM-to-LAM and the trainable LAM
+        # decoder; future fingertip labels enter only as supervision.
+        h_summary = h_t1_pred.float().mean(dim=1)
+        state_float = state.float()
+        pred = self.fingertip_head(torch.cat([h_summary, state_float], dim=-1))
+        pred = pred.view(pred.shape[0], expected_horizon, expected_points, 3)
+        target = fingertip_targets.float()
+        valid = fingertip_valid.to(device=pred.device, dtype=pred.dtype).unsqueeze(-1)
+
+        error = F.smooth_l1_loss(pred, target, reduction="none")
+        denom = valid.sum().clamp_min(1.0)
+        loss = (error * valid).sum() / (denom * 3.0)
+        squared = ((pred - target) ** 2) * valid
+        rmse = torch.sqrt(squared.sum() / (denom * 3.0)).detach()
+        return loss, rmse
 
     def _run_shared_encoding_core(
         self,
@@ -730,6 +800,25 @@ class LatentWorldPolicyBackend(nn.Module):
             else:
                 loss_perceptual = torch.tensor(0.0, device=device, dtype=lam_stage_dtype)
 
+        if float(self.model_cfg.fingertip_loss_weight) > 0.0:
+            fingertip_targets = prepared_batch.get("fingertip_targets")
+            fingertip_valid = prepared_batch.get("fingertip_valid")
+            if fingertip_targets is None or fingertip_valid is None:
+                raise KeyError(
+                    "Fingertip loss is enabled but the training batch has no fingertip_targets/fingertip_valid. "
+                    "Configure datasets.vla_data.fingertip_sidecar_root and generate sidecars first."
+                )
+            loss_fingertip, fingertip_rmse = self._compute_fingertip_loss(
+                h_t1_pred=shared.h_t1_pred,
+                state=prepared_batch["state"],
+                fingertip_targets=fingertip_targets,
+                fingertip_valid=fingertip_valid,
+            )
+        else:
+            loss_fingertip = torch.zeros((), device=device, dtype=torch.float32)
+            fingertip_rmse = torch.zeros((), device=device, dtype=torch.float32)
+        fingertip_rmse_mm = fingertip_rmse * 1000.0
+
         h_vlm_for_flow = _apply_flow_only_grad_to_h_vlm(
             h_vlm=shared.h_vlm,
             act_placeholder_mask=prepared_batch["act_placeholder_mask"],
@@ -778,6 +867,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 loss_flow
                 + self.model_cfg.perceptual_weight * loss_perceptual
                 + self.model_cfg.lam_encoder_distill_weight * loss_distill
+                + self.model_cfg.fingertip_loss_weight * loss_fingertip
             )
 
         zero = torch.tensor(0.0, device=device, dtype=loss_total.dtype)
@@ -786,6 +876,9 @@ class LatentWorldPolicyBackend(nn.Module):
             "loss_perceptual": loss_perceptual,
             "loss_distill": loss_distill,
             "loss_vlm": zero,
+            "loss_fingertip": loss_fingertip,
+            "fingertip_rmse": fingertip_rmse,
+            "fingertip_rmse_mm": fingertip_rmse_mm,
             "loss_total": loss_total,
         }
 

@@ -69,6 +69,9 @@ TRAIN_COMPONENT_METRIC_ALIASES = {
     "train_loss_distill": ("loss_distill", "distill_loss"),
     "train_loss_mse": ("loss_mse", "mse_loss"),
     "train_loss_lpips": ("loss_lpips", "lpips_loss"),
+    "train_loss_fingertip": ("loss_fingertip",),
+    "train_fingertip_rmse": ("fingertip_rmse",),
+    "train_fingertip_rmse_mm": ("fingertip_rmse_mm",),
 }
 
 def _accumulate_eval_scalar(metric_numerator: torch.Tensor, metric_denominator: torch.Tensor, value) -> None:

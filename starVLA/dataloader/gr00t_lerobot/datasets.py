@@ -541,6 +541,15 @@ class LeRobotSingleDataset(Dataset):
 
         self._dataset_path = Path(dataset_path)
         self._dataset_name = self._dataset_path.name
+        raw_fingertip_root = None
+        if hasattr(self.data_cfg, "get"):
+            raw_fingertip_root = self.data_cfg.get("fingertip_sidecar_root", None)
+        elif self.data_cfg is not None:
+            raw_fingertip_root = getattr(self.data_cfg, "fingertip_sidecar_root", None)
+        self._fingertip_sidecar_root = (
+            Path(str(raw_fingertip_root)).expanduser() if raw_fingertip_root else None
+        )
+        self._fingertip_episode_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         normalized_mode = str(mode).lower()
         if normalized_mode not in {"train", "val", "test", "all"}:
             raise ValueError(f"Unsupported dataset mode `{mode}`. Expected one of ['train', 'val', 'test'].")
@@ -1486,6 +1495,67 @@ class LeRobotSingleDataset(Dataset):
             for key in keys:
                 data[key] = get_data(trajectory_id, modality, key, base_index)
         return data
+
+    def get_fingertip_data(
+        self,
+        trajectory_id: int,
+        base_index: int,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """Load aligned fingertip positions for one action chunk.
+
+        Sidecars are deliberately kept outside the LeRobot parquet schema. The
+        action delta indices define the temporal contract, while out-of-episode
+        positions are clamped and marked invalid for the auxiliary loss.
+        """
+        if self._fingertip_sidecar_root is None:
+            return None
+
+        self._set_curr_episode(trajectory_id)
+        dataset_root = self._fingertip_sidecar_root / self.dataset_name
+        if not (dataset_root / "episodes").exists() and self._fingertip_sidecar_root.name == self.dataset_name:
+            dataset_root = self._fingertip_sidecar_root
+        sidecar_path = dataset_root / "episodes" / f"episode-{int(trajectory_id):06d}.npz"
+        if not sidecar_path.exists():
+            raise FileNotFoundError(
+                "Fingertip sidecar is enabled but the episode file is missing: "
+                f"{sidecar_path}. Generate sidecars before starting training."
+            )
+
+        cached = self._fingertip_episode_cache.get(int(trajectory_id))
+        if cached is None:
+            with np.load(sidecar_path, allow_pickle=False) as sidecar:
+                required = {"tip_position", "valid_mask"}
+                missing = sorted(required.difference(sidecar.files))
+                if missing:
+                    raise KeyError(f"Fingertip sidecar {sidecar_path} is missing keys: {missing}")
+                positions = np.asarray(sidecar["tip_position"], dtype=np.float32).copy()
+                valid = np.asarray(sidecar["valid_mask"], dtype=bool).copy()
+            if positions.ndim != 3 or positions.shape[-1] != 3:
+                raise ValueError(
+                    f"Invalid fingertip tip_position in {sidecar_path}: expected [T,N,3], got {positions.shape}"
+                )
+            if valid.shape != positions.shape[:2]:
+                raise ValueError(
+                    f"Invalid fingertip valid_mask in {sidecar_path}: expected {positions.shape[:2]}, got {valid.shape}"
+                )
+            if positions.shape[0] != int(self._curr_length):
+                raise ValueError(
+                    f"Fingertip sidecar length mismatch for dataset={self.dataset_name}, episode={trajectory_id}: "
+                    f"sidecar={positions.shape[0]}, dataset={self._curr_length}"
+                )
+            finite = np.isfinite(positions).all(axis=-1)
+            valid &= finite
+            self._fingertip_episode_cache[int(trajectory_id)] = (positions, valid)
+        else:
+            positions, valid = cached
+
+        action_keys = [key for key in self.delta_indices if key.startswith("action.")]
+        if not action_keys:
+            raise ValueError(f"Cannot align fingertip sidecar: no action delta indices for dataset={self.dataset_name}.")
+        step_indices = np.asarray(self.delta_indices[action_keys[0]], dtype=np.int64) + int(base_index)
+        valid_time = (step_indices >= 0) & (step_indices < int(self._curr_length))
+        clamped = np.clip(step_indices, 0, int(self._curr_length) - 1)
+        return positions[clamped].copy(), (valid[clamped] & valid_time[:, None]).copy()
 
     
     def get_trajectory_data(self, trajectory_id: int) -> pd.DataFrame:
@@ -2837,8 +2907,10 @@ class LeRobotMixtureDataset(Dataset):
         dataset: LeRobotSingleDataset,
         data: dict,
         selected_video_keys: list[str],
+        trajectory_id: int,
+        base_index: int,
     ) -> dict:
-        return self._build_latent_world_output_sample(dataset, data, selected_video_keys)
+        return self._build_latent_world_output_sample(dataset, data, selected_video_keys, trajectory_id, base_index)
 
     @staticmethod
     def _ensure_sequence_2d_tensor(value: torch.Tensor) -> torch.Tensor:
@@ -2852,6 +2924,8 @@ class LeRobotMixtureDataset(Dataset):
         dataset: LeRobotSingleDataset,
         data: dict,
         selected_video_keys: list[str],
+        trajectory_id: int,
+        base_index: int,
     ) -> dict:
         primary_videos: list[torch.Tensor] = []
         wrist_frames: list[torch.Tensor] = []
@@ -2882,7 +2956,7 @@ class LeRobotMixtureDataset(Dataset):
                 f"Missing required transformed keys for LatentWorld sample: available keys={sorted(data.keys())}."
             )
 
-        return {
+        output = {
             "primary_videos": primary_video_tensor,
             "wrist_images": wrist_images,
             "lang": str(language),
@@ -2891,6 +2965,10 @@ class LeRobotMixtureDataset(Dataset):
             "embodiment_id": int(dataset.embodiment_id),
             "action_hz": float(dataset.action_hz),
         }
+        fingertip_data = dataset.get_fingertip_data(trajectory_id, base_index)
+        if fingertip_data is not None:
+            output["fingertip_positions"], output["fingertip_valid"] = fingertip_data
+        return output
 
     def __getitem__(self, index: int) -> dict:
         """Get the data for a single trajectory and start index.
@@ -2918,7 +2996,7 @@ class LeRobotMixtureDataset(Dataset):
                 )
                 transforms = self._get_transforms_for_selected_video_keys(dataset, selected_video_keys)
                 data = transforms(raw_data)
-                return self._build_output_sample(dataset, data, selected_video_keys)
+                return self._build_output_sample(dataset, data, selected_video_keys, trajectory_id, step)
 
                 
             except Exception as e:

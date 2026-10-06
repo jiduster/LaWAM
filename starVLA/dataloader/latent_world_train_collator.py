@@ -133,6 +133,10 @@ class LatentWorldTrainCollator:
         states_list: list[torch.Tensor] = []
         embodiment_ids: list[int] = []
         action_hz_list: list[float] = []
+        fingertip_targets_list: list[torch.Tensor] = []
+        fingertip_valid_list: list[torch.Tensor] = []
+        fingertip_enabled = float(getattr(self.policy_cfg, "fingertip_loss_weight", 0.0)) > 0.0
+        window_size = int(self.policy_cfg.action_horizon)
 
         for sample in features:
             primary_videos = sample["primary_videos"].contiguous()
@@ -144,6 +148,36 @@ class LatentWorldTrainCollator:
             instruction = str(sample["lang"])
             embodiment_id = int(sample["embodiment_id"])
             action_hz = float(sample["action_hz"])
+
+            fingertip_positions = sample.get("fingertip_positions")
+            fingertip_valid = sample.get("fingertip_valid")
+            if fingertip_enabled and (fingertip_positions is None or fingertip_valid is None):
+                raise KeyError(
+                    "Fingertip loss is enabled but a dataset sample has no fingertip sidecar data. "
+                    "Set datasets.vla_data.fingertip_sidecar_root and generate all episode sidecars."
+                )
+            if fingertip_positions is not None or fingertip_valid is not None:
+                if fingertip_positions is None or fingertip_valid is None:
+                    raise KeyError("Fingertip sample must contain both fingertip_positions and fingertip_valid.")
+                fingertip_positions = torch.as_tensor(fingertip_positions, dtype=torch.float32).contiguous()
+                fingertip_valid = torch.as_tensor(fingertip_valid, dtype=torch.bool).contiguous()
+                if fingertip_positions.ndim != 3 or fingertip_positions.shape[-1] != 3:
+                    raise ValueError(
+                        "Expected fingertip_positions with shape [H,N,3], "
+                        f"got {tuple(fingertip_positions.shape)}."
+                    )
+                if fingertip_valid.shape != fingertip_positions.shape[:2]:
+                    raise ValueError(
+                        "Expected fingertip_valid with shape [H,N], "
+                        f"got {tuple(fingertip_valid.shape)} for positions {tuple(fingertip_positions.shape)}."
+                    )
+                if int(fingertip_positions.shape[0]) != int(window_size):
+                    raise ValueError(
+                        "Fingertip horizon does not match action_horizon: "
+                        f"tips={int(fingertip_positions.shape[0])}, action_horizon={window_size}."
+                    )
+                fingertip_targets_list.append(fingertip_positions - fingertip_positions[:1])
+                fingertip_valid_list.append(fingertip_valid)
 
             processed_primary_videos = primary_videos
             processed_wm_primary_video = wm_primary_video
@@ -236,4 +270,7 @@ class LatentWorldTrainCollator:
         }
         if not torch.is_tensor(batch["image_grid_thw"]):
             batch["image_grid_thw"] = None
+        if fingertip_enabled:
+            batch["fingertip_targets"] = torch.stack(fingertip_targets_list, dim=0)
+            batch["fingertip_valid"] = torch.stack(fingertip_valid_list, dim=0)
         return batch

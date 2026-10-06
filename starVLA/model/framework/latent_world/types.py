@@ -21,6 +21,8 @@ class LatentWorldPolicyTrainRawSample(TypedDict):
     action: torch.Tensor
     embodiment_id: int
     action_hz: float
+    fingertip_positions: NotRequired[torch.Tensor]
+    fingertip_valid: NotRequired[torch.Tensor]
 
 
 class LatentWorldPolicyInferExample(TypedDict, total=False):
@@ -62,3 +64,5 @@ class LatentWorldPolicyTrainBatch(TypedDict):
     image_grid_thw: Optional[torch.Tensor]
     actions: torch.Tensor
     actions_mask: torch.Tensor
+    fingertip_targets: NotRequired[torch.Tensor]
+    fingertip_valid: NotRequired[torch.Tensor]
