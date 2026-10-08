@@ -1,0 +1,100 @@
+# Stage 1 target-excluded adaptation for bimanual_photograph.
+# This version enables the fingertip auxiliary loss (group C).
+
+seed_everything: 2026
+
+model:
+  vision_model_id: "/data/home/zyh/LaWAM/results/Checkpoints/dinov3-vitb16-pretrain-lvd1689m"
+  dim: 1024
+  enc_layers: 24
+  ffn_expansion_factor: 4
+  num_heads: 16
+  max_state_dim: 14
+  num_embodiments: 32
+  codebook_size: 32
+  code_dim: 32
+  num_queries: 1
+  num_frames: 2
+  image_hw: [256, 256]
+  patch_size: 16
+  image_aug: true
+  dual_view_aug: true
+  dec_layers: 12
+  dropout: 0.0
+  warmup_steps: 1000
+  enc_add_state: false
+  enc_modal_mask: true
+  lambda_aux: 1.0
+  loss_type: "smooth_l1"
+  state_loss_type: "l2"
+  latent_layer_to_use: -2
+  multi_input: false
+  norm_latents: true
+  norm_latents_type: "ln"
+  lambda_diversity: 0.0
+  vq_type: "vae"
+  vq_kwargs:
+    layer_norm: true
+  lam_init_ckpt_path: "/data/home/zyh/LaWAM/latent_action_model/logs/dino_large_vae/lam_release/checkpoints/pytorch_model.pt"
+  fingertip_loss_weight: 0.1
+  fingertip_num_points: 8
+  fingertip_target_scale: 0.01
+  fingertip_head_hidden_dim: 512
+  project: lam
+  task_name: dino_large_vae_dexjoco_bimanual_exclude_photograph_fingertip_stage1
+  wandb_offline: true
+  optimizer:
+    class_path: torch.optim.AdamW
+    init_args:
+      lr: 3.0e-4
+      weight_decay: 1.0e-2
+  exclude_bias_norm_from_wd: true
+  make_data_pair: false
+  output_dir: output_pairs
+
+data:
+  data_root_dir: "/mnt/ceph2/DexJoCo-Datasets-LeRobot/dexjoco_lerobot_datasets"
+  data_mix: "dexjoco_bimanual_exclude_photograph"
+  fingertip_sidecar_root: "/data/home/zyh/LaWAM/latent_action_model/data/dexjoco_fingertip_sidecars_exclude_photograph"
+  video_backend: "pyav"
+  num_frames: 2
+  image_hw: [256, 256]
+  frame_dt_sec: 1.6
+  human_frame_dt_sec: 0.4
+  batch_size: 8
+  num_workers: 8
+  prefetch_factor: 4
+  pin_memory: true
+  persistent_workers: false
+  in_order: false
+  debug_repeat_batch: false
+  val_tail_ratio: 0.01
+  max_state_dim: 14
+
+trainer:
+  max_epochs: 10
+  accelerator: gpu
+  devices: auto
+  strategy: ddp_find_unused_parameters_false
+  accumulate_grad_batches: 1
+  precision: bf16-mixed
+  log_every_n_steps: 100
+  gradient_clip_val: 1.0
+  val_check_interval: 500
+  num_sanity_val_steps: 0
+  limit_val_batches: 50
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.ModelCheckpoint
+      init_args:
+        verbose: true
+        save_last: true
+        save_top_k: -1
+        save_on_train_epoch_end: true
+        every_n_epochs: 1
+        filename: "{epoch}"
+    - class_path: latent_action_model.core.lam_lightinng.SaveConfigToCheckpointCallback
+  logger:
+    - class_path: lightning.pytorch.loggers.TensorBoardLogger
+      init_args:
+        save_dir: latent_action_model/logs
+        name: dino_large_vae_dexjoco_bimanual_exclude_photograph_fingertip_stage1

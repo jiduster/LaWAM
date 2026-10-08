@@ -40,6 +40,10 @@ class VJEPA_LAM(LightningModule):
         dec_layers: int = 4,
         dropout: float = 0.1,
         lambda_aux: float = 0.2,
+        fingertip_loss_weight: float = 0.0,
+        fingertip_num_points: int = 8,
+        fingertip_target_scale: float = 0.01,
+        fingertip_head_hidden_dim: int = 512,
         loss_type: str = "l1",
         state_loss_type: str = "l1",
         project: str = 'UniVLA-latent_action_model',
@@ -67,6 +71,7 @@ class VJEPA_LAM(LightningModule):
         image_aug: bool = True,
         dual_view_aug: bool = False,
         decoder_last_ln: bool = True,
+        lam_init_ckpt_path: Optional[str] = None,
         **kwargs
     ):
         super().__init__()
@@ -111,6 +116,8 @@ class VJEPA_LAM(LightningModule):
             patch_size=self.patch_size,
             decoder_last_ln=decoder_last_ln,
         )
+        if lam_init_ckpt_path:
+            self._load_lam_initialization(lam_init_ckpt_path)
 
 
         
@@ -122,6 +129,27 @@ class VJEPA_LAM(LightningModule):
         
         self.lambda_aux = lambda_aux
         self.lambda_diversity = lambda_diversity
+        self.fingertip_loss_weight = float(fingertip_loss_weight)
+        self.fingertip_num_points = int(fingertip_num_points)
+        self.fingertip_target_scale = float(fingertip_target_scale)
+        self.fingertip_head_hidden_dim = int(fingertip_head_hidden_dim)
+        if self.fingertip_loss_weight < 0:
+            raise ValueError("fingertip_loss_weight must be >= 0")
+        if self.fingertip_loss_weight > 0 and self.fingertip_num_points <= 0:
+            raise ValueError("fingertip_num_points must be > 0 when fingertip loss is enabled")
+        if self.fingertip_loss_weight > 0 and self.fingertip_target_scale <= 0:
+            raise ValueError("fingertip_target_scale must be > 0 when fingertip loss is enabled")
+        if self.fingertip_loss_weight > 0 and self.fingertip_head_hidden_dim <= 0:
+            raise ValueError("fingertip_head_hidden_dim must be > 0 when fingertip loss is enabled")
+        self.fingertip_head = None
+        if self.fingertip_loss_weight > 0:
+            self.fingertip_head = nn.Sequential(
+                nn.Linear(code_dim, self.fingertip_head_hidden_dim),
+                nn.GELU(),
+                nn.Linear(self.fingertip_head_hidden_dim, self.fingertip_head_hidden_dim),
+                nn.GELU(),
+                nn.Linear(self.fingertip_head_hidden_dim, self.fingertip_num_points * 3),
+            )
 
         self.make_data_pair = make_data_pair
         self.output_dir = output_dir
@@ -159,6 +187,51 @@ class VJEPA_LAM(LightningModule):
         self._spike_armed = False
         self._spike_arm_step: Optional[int] = None
         self._last_step_tensors: Dict[str, Tensor] = {}
+
+    def _load_lam_initialization(self, checkpoint_path: str) -> None:
+        """Strictly warm-start only ``self.lam`` from a released LAM checkpoint."""
+        path = Path(checkpoint_path).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"LAM initialization checkpoint does not exist: {path}")
+        try:
+            checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(path, map_location="cpu")
+        if not isinstance(checkpoint, dict):
+            raise TypeError(f"LAM initialization checkpoint must be a dict: {path}")
+        state_dict = checkpoint.get("state_dict", checkpoint)
+        if not isinstance(state_dict, dict):
+            raise TypeError(f"LAM initialization state_dict must be a dict: {path}")
+
+        lam_state: Dict[str, Tensor] = {}
+        for key, value in state_dict.items():
+            if key.startswith("module.lam."):
+                lam_key = key[len("module.lam."):]
+            elif key.startswith("lam."):
+                lam_key = key[len("lam."):]
+            else:
+                continue
+            lam_state[lam_key] = value
+
+        model_state = self.lam.state_dict()
+        missing = sorted(set(model_state) - set(lam_state))
+        unexpected = sorted(set(lam_state) - set(model_state))
+        mismatched = [
+            key for key in sorted(set(model_state) & set(lam_state))
+            if tuple(model_state[key].shape) != tuple(lam_state[key].shape)
+        ]
+        if missing or unexpected or mismatched:
+            details = [f"Failed to strictly initialize LAM from `{path}`."]
+            if missing:
+                details.append(f"missing keys ({len(missing)}): {missing[:8]}")
+            if unexpected:
+                details.append(f"unexpected keys ({len(unexpected)}): {unexpected[:8]}")
+            if mismatched:
+                details.append(f"shape mismatches ({len(mismatched)}): {mismatched[:8]}")
+            raise RuntimeError(" ".join(details))
+
+        self.lam.load_state_dict(lam_state, strict=True)
+        print(f"[VJEPA_LAM] Strictly initialized LAM from {path}")
 
     def _is_global_zero(self) -> bool:
         trainer = getattr(self, "trainer", None)
@@ -579,6 +652,62 @@ class VJEPA_LAM(LightningModule):
     def shared_inference_step(self, batch: Dict) -> Tuple[Tensor, Dict]:
         return self._compute_step(batch=batch, vq_training=False)
 
+    def _compute_fingertip_auxiliary_loss(
+        self,
+        batch: Dict,
+        quantized: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        """Predict physical fingertip displacement from the Stage 1 latent."""
+        if self.fingertip_head is None or self.fingertip_loss_weight <= 0:
+            zero = quantized.sum() * 0.0
+            return zero, zero.detach()
+        if "fingertip_delta" not in batch or "fingertip_valid" not in batch:
+            raise KeyError(
+                "Stage 1 fingertip loss is enabled but the batch has no fingertip labels. "
+                "Set data.fingertip_sidecar_root and provide complete episode sidecars."
+            )
+
+        if quantized.ndim == 2:
+            quantized = quantized.unsqueeze(1)
+        if quantized.ndim != 3:
+            raise ValueError(f"Expected quantized latent [B,Q,D], got {tuple(quantized.shape)}")
+        z_summary = quantized.float().mean(dim=1)
+        prediction = self.fingertip_head(z_summary).view(
+            z_summary.shape[0], self.fingertip_num_points, 3
+        )
+
+        target = batch["fingertip_delta"].to(device=prediction.device, dtype=torch.float32)
+        valid = batch["fingertip_valid"].to(device=prediction.device, dtype=torch.bool)
+        expected_target_shape = (prediction.shape[0], self.fingertip_num_points, 3)
+        if tuple(target.shape) != expected_target_shape:
+            raise ValueError(
+                f"Expected fingertip_delta shape {expected_target_shape}, got {tuple(target.shape)}"
+            )
+        if tuple(valid.shape) != (prediction.shape[0], self.fingertip_num_points):
+            raise ValueError(
+                f"Expected fingertip_valid shape {(prediction.shape[0], self.fingertip_num_points)}, "
+                f"got {tuple(valid.shape)}"
+            )
+
+        normalized_target = target / self.fingertip_target_scale
+        element_loss = F.smooth_l1_loss(
+            prediction,
+            normalized_target,
+            beta=1.0,
+            reduction="none",
+        )
+        valid_float = valid.to(dtype=element_loss.dtype).unsqueeze(-1)
+        denominator = (valid_float.sum() * 3.0).clamp_min(1.0)
+        fingertip_loss = (element_loss * valid_float).sum() / denominator
+
+        with torch.no_grad():
+            squared_error = (prediction - normalized_target).pow(2)
+            rmse_normalized = torch.sqrt(
+                (squared_error * valid_float).sum() / denominator
+            )
+            rmse_mm = rmse_normalized * self.fingertip_target_scale * 1000.0
+        return fingertip_loss, rmse_mm
+
     def _compute_step(self, batch: Dict, vq_training: bool) -> Tuple[Tensor, Dict]:
         videos = batch["videos"]
         states = batch.get("states", batch.get("proprio", None))
@@ -602,7 +731,7 @@ class VJEPA_LAM(LightningModule):
                 )
         # print("videos shape:", videos.shape)
         if vq_training:
-            recon, dec_in, tgt, perplexity, indices, delta_s_pred, features, _, entropy_loss, vq_loss = self.lam(
+            recon, dec_in, tgt, perplexity, indices, delta_s_pred, features, quantized, entropy_loss, vq_loss = self.lam(
                 videos,
                 states,
                 dec_videos,
@@ -610,7 +739,7 @@ class VJEPA_LAM(LightningModule):
                 embodiment_ids=embodiment_ids,
             )
         else:
-            recon, dec_in, tgt, perplexity, indices, delta_s_pred, features, _, entropy_loss, vq_loss = self.lam.inference(
+            recon, dec_in, tgt, perplexity, indices, delta_s_pred, features, quantized, entropy_loss, vq_loss = self.lam.inference(
                 videos,
                 states,
                 dec_videos,
@@ -662,8 +791,25 @@ class VJEPA_LAM(LightningModule):
         entropy_loss = self.lambda_diversity * entropy_loss
         total_loss = loss + entropy_loss + vq_loss
         # total_loss = loss
-        aux_loss = torch.tensor(0.0, device=self.device)
+        aux_loss = recon.new_zeros(())
         aux_loss_logs: Dict[str, Tensor] = {}
+        logs: Dict[str, Tensor] = {
+            "recon_loss": recon_loss,
+            "vq_loss": vq_loss,
+            "perplexity": perplexity,
+            "cos_sim_metric": cos_sim_metric,
+            "l1_loss_metric": l1_loss_metric,
+        }
+
+        if self.fingertip_loss_weight > 0:
+            fingertip_loss, fingertip_rmse_mm = self._compute_fingertip_auxiliary_loss(
+                batch=batch,
+                quantized=quantized,
+            )
+            total_loss = total_loss + self.fingertip_loss_weight * fingertip_loss
+            aux_loss_logs["fingertip_loss"] = fingertip_loss
+            aux_loss_logs["fingertip_rmse_mm"] = fingertip_rmse_mm
+            logs.update(aux_loss_logs)
 
         if delta_s_pred is not None:
             if vq_training and "delta_proprio" not in batch:
@@ -710,12 +856,7 @@ class VJEPA_LAM(LightningModule):
                 total_loss = total_loss + dummy_state_loss
                 aux_loss_logs["state_loss_skipped"] = 0.0
 
-            logs: Dict[str, Tensor] = {
-                "recon_loss": recon_loss,
-                "vq_loss": vq_loss,
-                "perplexity": perplexity,
-                "cos_sim_metric": cos_sim_metric,
-                "l1_loss_metric": l1_loss_metric,
+            logs.update({
                 # "dec_in": dec_in.mean(),
                 # "dec_in_std": dec_in.std(),
                 # "tgt": tgt.mean(),
@@ -723,7 +864,7 @@ class VJEPA_LAM(LightningModule):
                 # "recon": recon.mean(),
                 # "recon_std": recon.std(),
                 **aux_loss_logs,
-            }
+            })
             if getattr(self.lam, "vq", None) is not None:
                 vq_module = self.lam.vq
                 if hasattr(vq_module, "last_sample_entropy"):

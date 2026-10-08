@@ -1501,11 +1501,13 @@ class LeRobotSingleDataset(Dataset):
         trajectory_id: int,
         base_index: int,
     ) -> tuple[np.ndarray, np.ndarray] | None:
-        """Load aligned fingertip positions for one action chunk.
+        """Load aligned fingertip positions for the configured temporal window.
 
         Sidecars are deliberately kept outside the LeRobot parquet schema. The
-        action delta indices define the temporal contract, while out-of-episode
-        positions are clamped and marked invalid for the auxiliary loss.
+        action delta indices define the Stage 2 temporal contract. Stage 1 has
+        no action modality, so its video/state delta indices are used instead.
+        Out-of-episode positions are clamped and marked invalid for the
+        auxiliary loss.
         """
         if self._fingertip_sidecar_root is None:
             return None
@@ -1549,10 +1551,20 @@ class LeRobotSingleDataset(Dataset):
         else:
             positions, valid = cached
 
-        action_keys = [key for key in self.delta_indices if key.startswith("action.")]
-        if not action_keys:
-            raise ValueError(f"Cannot align fingertip sidecar: no action delta indices for dataset={self.dataset_name}.")
-        step_indices = np.asarray(self.delta_indices[action_keys[0]], dtype=np.int64) + int(base_index)
+        # Prefer action indices for the existing Stage 2 action-horizon loss.
+        # Stage 1 intentionally configures only video/state modalities, so
+        # fall back to those temporal indices to obtain its physical-time pair.
+        delta_keys = [key for key in self.delta_indices if key.startswith("action.")]
+        if not delta_keys:
+            delta_keys = [key for key in self.delta_indices if key.startswith("video.")]
+        if not delta_keys:
+            delta_keys = [key for key in self.delta_indices if key.startswith("state.")]
+        if not delta_keys:
+            raise ValueError(
+                f"Cannot align fingertip sidecar: no video/state/action delta indices "
+                f"for dataset={self.dataset_name}."
+            )
+        step_indices = np.asarray(self.delta_indices[delta_keys[0]], dtype=np.int64) + int(base_index)
         valid_time = (step_indices >= 0) & (step_indices < int(self._curr_length))
         clamped = np.clip(step_indices, 0, int(self._curr_length) - 1)
         return positions[clamped].copy(), (valid[clamped] & valid_time[:, None]).copy()

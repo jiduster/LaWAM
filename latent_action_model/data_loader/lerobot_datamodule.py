@@ -41,6 +41,7 @@ class LeRobotDataModule(LightningDataModule):
         # Physical-time sampling interval in seconds (required).
         frame_dt_sec: float,
         human_frame_dt_sec: Optional[float] = None,
+        fingertip_sidecar_root: Optional[str] = None,
         batch_size: int = 4,
         num_workers: int = 4,
         prefetch_factor: Optional[int] = None,
@@ -72,6 +73,7 @@ class LeRobotDataModule(LightningDataModule):
         self.image_hw = (int(image_hw[0]), int(image_hw[1]))
         self.frame_dt_sec = frame_dt_sec
         self.human_frame_dt_sec = human_frame_dt_sec
+        self.fingertip_sidecar_root = fingertip_sidecar_root
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
@@ -99,6 +101,7 @@ class LeRobotDataModule(LightningDataModule):
                 image_hw=self.image_hw,
                 frame_dt_sec=self.frame_dt_sec,
                 human_frame_dt_sec=self.human_frame_dt_sec,
+                fingertip_sidecar_root=self.fingertip_sidecar_root,
                 debug_repeat_batch=self.debug_repeat_batch,
             )
         if stage in (None, "fit", "validate"):
@@ -115,6 +118,7 @@ class LeRobotDataModule(LightningDataModule):
                     image_hw=self.image_hw,
                     frame_dt_sec=self.frame_dt_sec,
                     human_frame_dt_sec=self.human_frame_dt_sec,
+                    fingertip_sidecar_root=self.fingertip_sidecar_root,
                     debug_repeat_batch=False,
                 )
             else:

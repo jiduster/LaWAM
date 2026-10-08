@@ -105,6 +105,7 @@ class LeRobotLAMDataset(Dataset):
         *,
         frame_dt_sec: float,
         human_frame_dt_sec: Optional[float] = None,
+        fingertip_sidecar_root: Optional[str | Path] = None,
         max_retries: int = 5,
         debug_repeat_batch: Union[bool, int] = False,
     ) -> None:
@@ -137,6 +138,11 @@ class LeRobotLAMDataset(Dataset):
         self.image_hw = (int(image_hw[0]), int(image_hw[1]))
         self.frame_dt_sec = frame_dt_sec
         self.human_frame_dt_sec = human_frame_dt_sec
+        self.fingertip_sidecar_root = (
+            Path(fingertip_sidecar_root).expanduser()
+            if fingertip_sidecar_root is not None
+            else None
+        )
         self.max_retries = max_retries
 
 
@@ -150,6 +156,11 @@ class LeRobotLAMDataset(Dataset):
         data_cfg = {
             "data_root_dir": str(self.data_root_dir),
             "video_backend": self.video_backend,
+            "fingertip_sidecar_root": (
+                str(self.fingertip_sidecar_root)
+                if self.fingertip_sidecar_root is not None
+                else None
+            ),
         }
 
         mixture_spec = DATASET_NAMED_MIXTURES[self.data_mix]
@@ -311,9 +322,21 @@ class LeRobotLAMDataset(Dataset):
             raise RuntimeError("No state keys found for LAM dataset.")
         proprio = torch.cat(proprio_tensors, dim=-1).contiguous()
 
+        fingertip_data = dataset.get_fingertip_data(traj_id, base_index)
+        fingertip_positions = None
+        fingertip_valid = None
+        if fingertip_data is not None:
+            fingertip_positions, fingertip_valid = fingertip_data
+            fingertip_positions = torch.from_numpy(
+                np.ascontiguousarray(fingertip_positions)
+            ).to(torch.float32)
+            fingertip_valid = torch.from_numpy(
+                np.ascontiguousarray(fingertip_valid)
+            ).to(torch.bool)
+
         embodiment_id = int(dataset.embodiment_id)
 
-        return {
+        sample = {
             "frames": frames_t,
             "proprio": proprio,
             "embodiment_id": embodiment_id,
@@ -322,6 +345,10 @@ class LeRobotLAMDataset(Dataset):
             "trajectory_id": int(traj_id) if isinstance(traj_id, (int, np.integer)) else str(traj_id),
             "base_index": int(base_index),
         }
+        if fingertip_positions is not None:
+            sample["fingertip_positions"] = fingertip_positions
+            sample["fingertip_valid"] = fingertip_valid
+        return sample
 
     def __getitem__(self, index: int) -> Dict:
         # === Debug mode: cache and repeat samples ===

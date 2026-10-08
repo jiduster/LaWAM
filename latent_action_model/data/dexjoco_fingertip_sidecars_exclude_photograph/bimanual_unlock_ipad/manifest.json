@@ -1,0 +1,504 @@
+{
+  "episodes": [
+    {
+      "episode_index": 0,
+      "length": 402,
+      "file": "episodes/episode-000000.npz"
+    },
+    {
+      "episode_index": 1,
+      "length": 385,
+      "file": "episodes/episode-000001.npz"
+    },
+    {
+      "episode_index": 2,
+      "length": 387,
+      "file": "episodes/episode-000002.npz"
+    },
+    {
+      "episode_index": 3,
+      "length": 304,
+      "file": "episodes/episode-000003.npz"
+    },
+    {
+      "episode_index": 4,
+      "length": 335,
+      "file": "episodes/episode-000004.npz"
+    },
+    {
+      "episode_index": 5,
+      "length": 456,
+      "file": "episodes/episode-000005.npz"
+    },
+    {
+      "episode_index": 6,
+      "length": 349,
+      "file": "episodes/episode-000006.npz"
+    },
+    {
+      "episode_index": 7,
+      "length": 375,
+      "file": "episodes/episode-000007.npz"
+    },
+    {
+      "episode_index": 8,
+      "length": 421,
+      "file": "episodes/episode-000008.npz"
+    },
+    {
+      "episode_index": 9,
+      "length": 432,
+      "file": "episodes/episode-000009.npz"
+    },
+    {
+      "episode_index": 10,
+      "length": 353,
+      "file": "episodes/episode-000010.npz"
+    },
+    {
+      "episode_index": 11,
+      "length": 414,
+      "file": "episodes/episode-000011.npz"
+    },
+    {
+      "episode_index": 12,
+      "length": 397,
+      "file": "episodes/episode-000012.npz"
+    },
+    {
+      "episode_index": 13,
+      "length": 357,
+      "file": "episodes/episode-000013.npz"
+    },
+    {
+      "episode_index": 14,
+      "length": 388,
+      "file": "episodes/episode-000014.npz"
+    },
+    {
+      "episode_index": 15,
+      "length": 371,
+      "file": "episodes/episode-000015.npz"
+    },
+    {
+      "episode_index": 16,
+      "length": 464,
+      "file": "episodes/episode-000016.npz"
+    },
+    {
+      "episode_index": 17,
+      "length": 386,
+      "file": "episodes/episode-000017.npz"
+    },
+    {
+      "episode_index": 18,
+      "length": 496,
+      "file": "episodes/episode-000018.npz"
+    },
+    {
+      "episode_index": 19,
+      "length": 410,
+      "file": "episodes/episode-000019.npz"
+    },
+    {
+      "episode_index": 20,
+      "length": 329,
+      "file": "episodes/episode-000020.npz"
+    },
+    {
+      "episode_index": 21,
+      "length": 436,
+      "file": "episodes/episode-000021.npz"
+    },
+    {
+      "episode_index": 22,
+      "length": 409,
+      "file": "episodes/episode-000022.npz"
+    },
+    {
+      "episode_index": 23,
+      "length": 367,
+      "file": "episodes/episode-000023.npz"
+    },
+    {
+      "episode_index": 24,
+      "length": 413,
+      "file": "episodes/episode-000024.npz"
+    },
+    {
+      "episode_index": 25,
+      "length": 388,
+      "file": "episodes/episode-000025.npz"
+    },
+    {
+      "episode_index": 26,
+      "length": 405,
+      "file": "episodes/episode-000026.npz"
+    },
+    {
+      "episode_index": 27,
+      "length": 353,
+      "file": "episodes/episode-000027.npz"
+    },
+    {
+      "episode_index": 28,
+      "length": 498,
+      "file": "episodes/episode-000028.npz"
+    },
+    {
+      "episode_index": 29,
+      "length": 349,
+      "file": "episodes/episode-000029.npz"
+    },
+    {
+      "episode_index": 30,
+      "length": 420,
+      "file": "episodes/episode-000030.npz"
+    },
+    {
+      "episode_index": 31,
+      "length": 431,
+      "file": "episodes/episode-000031.npz"
+    },
+    {
+      "episode_index": 32,
+      "length": 377,
+      "file": "episodes/episode-000032.npz"
+    },
+    {
+      "episode_index": 33,
+      "length": 488,
+      "file": "episodes/episode-000033.npz"
+    },
+    {
+      "episode_index": 34,
+      "length": 412,
+      "file": "episodes/episode-000034.npz"
+    },
+    {
+      "episode_index": 35,
+      "length": 378,
+      "file": "episodes/episode-000035.npz"
+    },
+    {
+      "episode_index": 36,
+      "length": 363,
+      "file": "episodes/episode-000036.npz"
+    },
+    {
+      "episode_index": 37,
+      "length": 366,
+      "file": "episodes/episode-000037.npz"
+    },
+    {
+      "episode_index": 38,
+      "length": 387,
+      "file": "episodes/episode-000038.npz"
+    },
+    {
+      "episode_index": 39,
+      "length": 421,
+      "file": "episodes/episode-000039.npz"
+    },
+    {
+      "episode_index": 40,
+      "length": 341,
+      "file": "episodes/episode-000040.npz"
+    },
+    {
+      "episode_index": 41,
+      "length": 406,
+      "file": "episodes/episode-000041.npz"
+    },
+    {
+      "episode_index": 42,
+      "length": 339,
+      "file": "episodes/episode-000042.npz"
+    },
+    {
+      "episode_index": 43,
+      "length": 358,
+      "file": "episodes/episode-000043.npz"
+    },
+    {
+      "episode_index": 44,
+      "length": 457,
+      "file": "episodes/episode-000044.npz"
+    },
+    {
+      "episode_index": 45,
+      "length": 402,
+      "file": "episodes/episode-000045.npz"
+    },
+    {
+      "episode_index": 46,
+      "length": 356,
+      "file": "episodes/episode-000046.npz"
+    },
+    {
+      "episode_index": 47,
+      "length": 378,
+      "file": "episodes/episode-000047.npz"
+    },
+    {
+      "episode_index": 48,
+      "length": 383,
+      "file": "episodes/episode-000048.npz"
+    },
+    {
+      "episode_index": 49,
+      "length": 495,
+      "file": "episodes/episode-000049.npz"
+    },
+    {
+      "episode_index": 50,
+      "length": 396,
+      "file": "episodes/episode-000050.npz"
+    },
+    {
+      "episode_index": 51,
+      "length": 367,
+      "file": "episodes/episode-000051.npz"
+    },
+    {
+      "episode_index": 52,
+      "length": 341,
+      "file": "episodes/episode-000052.npz"
+    },
+    {
+      "episode_index": 53,
+      "length": 378,
+      "file": "episodes/episode-000053.npz"
+    },
+    {
+      "episode_index": 54,
+      "length": 345,
+      "file": "episodes/episode-000054.npz"
+    },
+    {
+      "episode_index": 55,
+      "length": 444,
+      "file": "episodes/episode-000055.npz"
+    },
+    {
+      "episode_index": 56,
+      "length": 467,
+      "file": "episodes/episode-000056.npz"
+    },
+    {
+      "episode_index": 57,
+      "length": 517,
+      "file": "episodes/episode-000057.npz"
+    },
+    {
+      "episode_index": 58,
+      "length": 417,
+      "file": "episodes/episode-000058.npz"
+    },
+    {
+      "episode_index": 59,
+      "length": 404,
+      "file": "episodes/episode-000059.npz"
+    },
+    {
+      "episode_index": 60,
+      "length": 372,
+      "file": "episodes/episode-000060.npz"
+    },
+    {
+      "episode_index": 61,
+      "length": 393,
+      "file": "episodes/episode-000061.npz"
+    },
+    {
+      "episode_index": 62,
+      "length": 442,
+      "file": "episodes/episode-000062.npz"
+    },
+    {
+      "episode_index": 63,
+      "length": 494,
+      "file": "episodes/episode-000063.npz"
+    },
+    {
+      "episode_index": 64,
+      "length": 386,
+      "file": "episodes/episode-000064.npz"
+    },
+    {
+      "episode_index": 65,
+      "length": 435,
+      "file": "episodes/episode-000065.npz"
+    },
+    {
+      "episode_index": 66,
+      "length": 399,
+      "file": "episodes/episode-000066.npz"
+    },
+    {
+      "episode_index": 67,
+      "length": 333,
+      "file": "episodes/episode-000067.npz"
+    },
+    {
+      "episode_index": 68,
+      "length": 386,
+      "file": "episodes/episode-000068.npz"
+    },
+    {
+      "episode_index": 69,
+      "length": 386,
+      "file": "episodes/episode-000069.npz"
+    },
+    {
+      "episode_index": 70,
+      "length": 414,
+      "file": "episodes/episode-000070.npz"
+    },
+    {
+      "episode_index": 71,
+      "length": 419,
+      "file": "episodes/episode-000071.npz"
+    },
+    {
+      "episode_index": 72,
+      "length": 375,
+      "file": "episodes/episode-000072.npz"
+    },
+    {
+      "episode_index": 73,
+      "length": 433,
+      "file": "episodes/episode-000073.npz"
+    },
+    {
+      "episode_index": 74,
+      "length": 538,
+      "file": "episodes/episode-000074.npz"
+    },
+    {
+      "episode_index": 75,
+      "length": 418,
+      "file": "episodes/episode-000075.npz"
+    },
+    {
+      "episode_index": 76,
+      "length": 432,
+      "file": "episodes/episode-000076.npz"
+    },
+    {
+      "episode_index": 77,
+      "length": 442,
+      "file": "episodes/episode-000077.npz"
+    },
+    {
+      "episode_index": 78,
+      "length": 399,
+      "file": "episodes/episode-000078.npz"
+    },
+    {
+      "episode_index": 79,
+      "length": 451,
+      "file": "episodes/episode-000079.npz"
+    },
+    {
+      "episode_index": 80,
+      "length": 405,
+      "file": "episodes/episode-000080.npz"
+    },
+    {
+      "episode_index": 81,
+      "length": 451,
+      "file": "episodes/episode-000081.npz"
+    },
+    {
+      "episode_index": 82,
+      "length": 442,
+      "file": "episodes/episode-000082.npz"
+    },
+    {
+      "episode_index": 83,
+      "length": 492,
+      "file": "episodes/episode-000083.npz"
+    },
+    {
+      "episode_index": 84,
+      "length": 435,
+      "file": "episodes/episode-000084.npz"
+    },
+    {
+      "episode_index": 85,
+      "length": 383,
+      "file": "episodes/episode-000085.npz"
+    },
+    {
+      "episode_index": 86,
+      "length": 312,
+      "file": "episodes/episode-000086.npz"
+    },
+    {
+      "episode_index": 87,
+      "length": 434,
+      "file": "episodes/episode-000087.npz"
+    },
+    {
+      "episode_index": 88,
+      "length": 492,
+      "file": "episodes/episode-000088.npz"
+    },
+    {
+      "episode_index": 89,
+      "length": 362,
+      "file": "episodes/episode-000089.npz"
+    },
+    {
+      "episode_index": 90,
+      "length": 506,
+      "file": "episodes/episode-000090.npz"
+    },
+    {
+      "episode_index": 91,
+      "length": 420,
+      "file": "episodes/episode-000091.npz"
+    },
+    {
+      "episode_index": 92,
+      "length": 425,
+      "file": "episodes/episode-000092.npz"
+    },
+    {
+      "episode_index": 93,
+      "length": 436,
+      "file": "episodes/episode-000093.npz"
+    },
+    {
+      "episode_index": 94,
+      "length": 317,
+      "file": "episodes/episode-000094.npz"
+    },
+    {
+      "episode_index": 95,
+      "length": 471,
+      "file": "episodes/episode-000095.npz"
+    },
+    {
+      "episode_index": 96,
+      "length": 364,
+      "file": "episodes/episode-000096.npz"
+    },
+    {
+      "episode_index": 97,
+      "length": 412,
+      "file": "episodes/episode-000097.npz"
+    },
+    {
+      "episode_index": 98,
+      "length": 428,
+      "file": "episodes/episode-000098.npz"
+    },
+    {
+      "episode_index": 99,
+      "length": 440,
+      "file": "episodes/episode-000099.npz"
+    }
+  ]
+}

@@ -12,6 +12,10 @@ def lam_collate(batch: Sequence[Dict], max_state_dim: int = 32) -> Dict[str, Any
     - Within a batch: all samples have the same (T,C,H,W), same T for proprio.
       If D > max_state_dim, the proprio vector is truncated to the first max_state_dim dimensions.
 
+    If fingertip sidecar fields are present in every sample, also returns:
+        fingertip_delta: [B,N,3] endpoint displacement in meters
+        fingertip_valid: [B,N] endpoint-valid mask
+
     Returns:
         videos: [B,T,C,H,W] uint8
         states: [B,2,max_state_dim] float32 (start/end proprio with right padding)
@@ -33,6 +37,24 @@ def lam_collate(batch: Sequence[Dict], max_state_dim: int = 32) -> Dict[str, Any
     state_mask_t = torch.zeros((batch_size, 2, max_state_dim), dtype=torch.bool)
     delta_t = torch.zeros((batch_size, max_state_dim), dtype=torch.float32)
     proprio_mask_t = torch.zeros((batch_size, max_state_dim), dtype=torch.float32)
+    has_fingertip = [
+        "fingertip_positions" in sample or "fingertip_valid" in sample
+        for sample in batch
+    ]
+    if any(has_fingertip) and not all(has_fingertip):
+        raise ValueError("Fingertip sidecar data must be present for every sample in a batch.")
+    fingertip_delta_t = None
+    fingertip_valid_t = None
+    if all(has_fingertip):
+        first_positions = torch.as_tensor(batch[0]["fingertip_positions"])
+        if first_positions.ndim != 3 or first_positions.shape[-1] != 3:
+            raise ValueError(
+                "Expected fingertip_positions with shape [T,N,3], "
+                f"got {tuple(first_positions.shape)}."
+            )
+        num_points = int(first_positions.shape[1])
+        fingertip_delta_t = torch.zeros((batch_size, num_points, 3), dtype=torch.float32)
+        fingertip_valid_t = torch.zeros((batch_size, num_points), dtype=torch.bool)
     for i, sample in enumerate(batch):
         proprio = sample["proprio"]
         if not isinstance(proprio, torch.Tensor):
@@ -58,6 +80,24 @@ def lam_collate(batch: Sequence[Dict], max_state_dim: int = 32) -> Dict[str, Any
         delta_t[i, :D] = end - start
         proprio_mask_t[i, :D] = 1.0
 
+        if all(has_fingertip):
+            positions = torch.as_tensor(sample["fingertip_positions"], dtype=torch.float32)
+            valid = torch.as_tensor(sample["fingertip_valid"], dtype=torch.bool)
+            if positions.shape != (positions.shape[0], num_points, 3):
+                raise ValueError(
+                    "All fingertip positions must have shape [T,N,3] with a fixed N. "
+                    f"Sample {i} has {tuple(positions.shape)}."
+                )
+            if valid.shape != positions.shape[:2]:
+                raise ValueError(
+                    "Expected fingertip_valid shape [T,N], "
+                    f"got {tuple(valid.shape)} for positions {tuple(positions.shape)}."
+                )
+            if positions.shape[0] < 2:
+                raise ValueError("Stage 1 fingertip supervision requires at least two temporal endpoints.")
+            fingertip_delta_t[i] = positions[-1] - positions[0]
+            fingertip_valid_t[i] = valid[0] & valid[-1]
+
     embodiment_ids_t = torch.tensor(
         [s["embodiment_id"] for s in batch],
         dtype=torch.long,
@@ -69,7 +109,7 @@ def lam_collate(batch: Sequence[Dict], max_state_dim: int = 32) -> Dict[str, Any
         dtype=torch.long,
     )
 
-    return {
+    output = {
         "videos": videos,
         "states": states_t,
         "state_mask": state_mask_t,
@@ -81,3 +121,7 @@ def lam_collate(batch: Sequence[Dict], max_state_dim: int = 32) -> Dict[str, Any
         "trajectory_ids": trajectory_ids,
         "base_indices": base_indices,
     }
+    if fingertip_delta_t is not None:
+        output["fingertip_delta"] = fingertip_delta_t
+        output["fingertip_valid"] = fingertip_valid_t
+    return output
