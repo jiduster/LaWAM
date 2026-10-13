@@ -125,4 +125,6 @@ class LatentWorldPolicyConfigBuilder:
             for key in flow_keys:
                 setattr(policy_cfg.flow_cfg, key, flow_cfg[key])
 
+        # Validate head selection before any model or dataloader is constructed.
+        _ = policy_cfg.num_vlm_action_queries
         return policy_cfg

@@ -51,7 +51,7 @@ def _build_latent_world_collator(cfg, *, policy_cfg, training: bool):
     collator = LatentWorldTrainCollator(
         policy_cfg=policy_cfg,
         processor_spec=processor_spec,
-        act_queries=int(policy_cfg.num_action_queries),
+        act_queries=int(policy_cfg.num_vlm_action_queries),
         flow_queries=int(policy_cfg.flow_action_num_queries),
         enable_primary_video_aug=bool(vla_dataset_cfg.get("enable_primary_video_aug", False)),
         enable_primary_random_resized_crop=bool(vla_dataset_cfg.get("enable_primary_random_resized_crop", False)),

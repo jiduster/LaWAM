@@ -20,6 +20,7 @@ from .vlm_auto import (
 from starVLA.model.tools import sync_managed_modules_training_mode
 
 from .flowmatching_expert import ConditionalFlowMatchingConfig, ConditionalFlowMatchingHead
+from .latent_action_head import LatentActionHead as VLMToLAMQFormer
 
 
 # ============================================================================
@@ -72,6 +73,7 @@ class LatentWorldPolicyConfig:
     # Independent additions
     num_action_queries: int = 8
     flow_action_num_queries: int = 8
+    latent_action_head_type: str = "vlm_queries"  # "vlm_queries" | "external_qformer"
 
     # DexJoCo fingertip auxiliary prediction. The head is only constructed when
     # the loss weight is positive, so existing checkpoints remain compatible.
@@ -80,68 +82,19 @@ class LatentWorldPolicyConfig:
     fingertip_target_mode: str = "delta"
     fingertip_head_hidden_dim: int = 512
 
-
-# ============================================================================
-# Lightweight Blocks
-# ============================================================================
-
-
-class VLMToLAMQFormer(nn.Module):
-    """Refine VLM query hidden states into one latent action embedding."""
-
-    def __init__(
-        self,
-        *,
-        vlm_hidden_dim: int,
-        lam_code_dim: int,
-        num_layers: int = 1,
-        num_heads: int = 8,
-        ffn_expansion_factor: float = 4.0,
-        dropout: float = 0.0,
-    ) -> None:
-        super().__init__()
-
-        self.query = nn.Parameter(torch.randn(1, 1, int(lam_code_dim)) * 0.02)
-        self.cross_attns = nn.ModuleList(
-            [
-                nn.MultiheadAttention(
-                    embed_dim=int(lam_code_dim),
-                    kdim=int(vlm_hidden_dim),
-                    vdim=int(vlm_hidden_dim),
-                    num_heads=int(num_heads),
-                    dropout=float(dropout),
-                    batch_first=True,
-                )
-                for _ in range(int(num_layers))
-            ]
-        )
-        self.norm_qs = nn.ModuleList([nn.LayerNorm(int(lam_code_dim)) for _ in range(int(num_layers))])
-        self.norm_kvs = nn.ModuleList([nn.LayerNorm(int(vlm_hidden_dim)) for _ in range(int(num_layers))])
-        hidden_dim = int(int(lam_code_dim) * float(ffn_expansion_factor))
-        self.ffns = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.LayerNorm(int(lam_code_dim)),
-                    nn.Linear(int(lam_code_dim), hidden_dim),
-                    nn.GELU(),
-                    nn.Dropout(float(dropout)),
-                    nn.Linear(hidden_dim, int(lam_code_dim)),
-                )
-                for _ in range(int(num_layers))
-            ]
-        )
-        self.final_norm = nn.LayerNorm(int(lam_code_dim))
-
-    def forward(self, context: torch.Tensor) -> torch.Tensor:
-        bsz = int(context.shape[0])
-        queries = self.query.expand(bsz, -1, -1).to(device=context.device, dtype=context.dtype)
-        for norm_q, norm_kv, xattn, ffn in zip(self.norm_qs, self.norm_kvs, self.cross_attns, self.ffns):
-            q = norm_q(queries)
-            kv = norm_kv(context)
-            attn_out, _ = xattn(q, kv, kv)
-            queries = queries + attn_out
-            queries = queries + ffn(queries)
-        return self.final_norm(queries)
+    @property
+    def num_vlm_action_queries(self) -> int:
+        head_type = str(self.latent_action_head_type).lower()
+        if head_type not in {"vlm_queries", "external_qformer"}:
+            raise ValueError(f"Unknown latent_action_head_type: {self.latent_action_head_type!r}.")
+        if head_type == "external_qformer":
+            if self.flow_only_mode:
+                raise ValueError("external_qformer requires flow_only_mode=false; no VLM act-query boundary exists.")
+            return 0
+        count = int(self.num_action_queries)
+        if count <= 0:
+            raise ValueError("vlm_queries requires num_action_queries > 0.")
+        return count
 
 
 # ============================================================================
@@ -263,6 +216,7 @@ class LatentWorldPolicyBackend(nn.Module):
         super().__init__()
         self.model_cfg = model_cfg
         self.vlm_model_id = str(vlm_model_id)
+        self.num_action_queries = int(self.model_cfg.num_vlm_action_queries)
 
         # 1) Load VLM + processor/tokenizer and register placeholder token.
         self.vlm, self.processor, self.tokenizer, self.placeholder_token_id = _load_vlm_and_processor(
@@ -274,8 +228,6 @@ class LatentWorldPolicyBackend(nn.Module):
         self.lam = load_latent_action_model(self.model_cfg.lam_ckpt_path, self.model_cfg.lam_yaml_path)
 
         # 3) Create trainable query and mapping head.
-        self.num_action_queries = int(self.model_cfg.num_action_queries)
-
         vlm_cfg = getattr(self.vlm, "config", None)
         text_cfg = getattr(vlm_cfg, "text_config", None)
         # NOTE: don't nest `getattr` in default value; default expression is evaluated eagerly.
@@ -286,9 +238,13 @@ class LatentWorldPolicyBackend(nn.Module):
             raise AttributeError("[LatentWorldPolicyBackend] cannot resolve VLM hidden_size from config.")
         vlm_hidden_dim = int(vlm_hidden_size)
         lam_code_dim = int(self.lam.code_dim)
-        self.act_query = nn.Parameter(torch.randn(self.num_action_queries, vlm_hidden_dim) * 0.02)
+        self.act_query = (
+            nn.Parameter(torch.randn(self.num_action_queries, vlm_hidden_dim) * 0.02)
+            if self.num_action_queries > 0 else None
+        )
         self.flow_action_num_queries = int(self.model_cfg.flow_action_num_queries)
         self.flow_action_query = nn.Parameter(torch.randn(self.flow_action_num_queries, vlm_hidden_dim) * 0.02)
+        # Keep the pretrained parameter prefix in both modes for exact head initialization.
         self.vlm_to_lam = VLMToLAMQFormer(
             vlm_hidden_dim=vlm_hidden_dim,
             lam_code_dim=lam_code_dim,
@@ -395,7 +351,7 @@ class LatentWorldPolicyBackend(nn.Module):
         image_grid_thw: Optional[torch.LongTensor],
         act_placeholder_mask: torch.BoolTensor,
         flow_placeholder_mask: torch.BoolTensor,
-        act_query: torch.Tensor,
+        act_query: Optional[torch.Tensor],
         flow_query: torch.Tensor,
     ) -> Dict[str, Any]:
         embed = self.vlm.get_input_embeddings()
@@ -403,13 +359,18 @@ class LatentWorldPolicyBackend(nn.Module):
             raise RuntimeError("[LatentWorldPolicyBackend] VLM does not expose input embeddings.")
         inputs_embeds = embed(input_ids)
 
-        self._inject_queries(
-            inputs_embeds=inputs_embeds,
-            placeholder_mask=act_placeholder_mask,
-            queries=act_query,
-            num_queries=int(self.num_action_queries),
-            name="act_query",
-        )
+        if self.num_action_queries > 0:
+            if act_query is None:
+                raise ValueError("VLM action queries are missing for latent_action_head_type='vlm_queries'.")
+            self._inject_queries(
+                inputs_embeds=inputs_embeds,
+                placeholder_mask=act_placeholder_mask,
+                queries=act_query,
+                num_queries=int(self.num_action_queries),
+                name="act_query",
+            )
+        elif act_placeholder_mask.any():
+            raise ValueError("external_qformer batches must not contain VLM latent action placeholders.")
         self._inject_queries(
             inputs_embeds=inputs_embeds,
             placeholder_mask=flow_placeholder_mask,
@@ -439,17 +400,20 @@ class LatentWorldPolicyBackend(nn.Module):
                 "`last_hidden_state`. "
                 f"output_type={type(vlm_out).__name__}, output_keys={output_keys}."
             )
-        bsz = int(hidden.shape[0])
-        q = int(self.num_action_queries)
-        h_act = hidden[act_placeholder_mask]
-        if h_act.numel() == 0:
-            raise ValueError("[LatentWorldPolicyBackend] empty action hidden selection; check act_placeholder_mask.")
-        if h_act.shape[0] != bsz * q:
-            raise ValueError(
-                f"[LatentWorldPolicyBackend] action hidden count mismatch: got={h_act.shape[0]}, expected={bsz * q}"
-            )
-
-        pred_latent = self.vlm_to_lam(h_act.view(bsz, q, -1))
+        if self.num_action_queries == 0:
+            # Both heads read the same full VLM output, including wrist and text tokens.
+            pred_latent = self.vlm_to_lam(hidden, attention_mask=attention_mask)
+        else:
+            bsz = int(hidden.shape[0])
+            q = int(self.num_action_queries)
+            h_act = hidden[act_placeholder_mask]
+            if h_act.numel() == 0:
+                raise ValueError("[LatentWorldPolicyBackend] empty action hidden selection; check act_placeholder_mask.")
+            if h_act.shape[0] != bsz * q:
+                raise ValueError(
+                    f"[LatentWorldPolicyBackend] action hidden count mismatch: got={h_act.shape[0]}, expected={bsz * q}"
+                )
+            pred_latent = self.vlm_to_lam(h_act.view(bsz, q, -1))
         return {
             "h_vlm": hidden,
             "pred_latent": pred_latent,
@@ -619,12 +583,14 @@ class LatentWorldPolicyBackend(nn.Module):
     # ------------------
     # Forward
     # ------------------
-    def _prepare_queries(self, *, device: torch.device, vlm_stage_dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _prepare_queries(
+        self, *, device: torch.device, vlm_stage_dtype: torch.dtype,
+    ) -> Tuple[Optional[torch.Tensor], torch.Tensor]:
         flow_query = getattr(self, "flow_action_query", None)
         if flow_query is None:
             raise ValueError("[LatentWorldPolicyBackend] flow_action_query is None; check policy backend initialization.")
         vlm_embed_dtype = _module_param_dtype(self.vlm.get_input_embeddings(), default=vlm_stage_dtype)
-        act_query = self.act_query.to(device=device, dtype=vlm_embed_dtype)
+        act_query = None if self.act_query is None else self.act_query.to(device=device, dtype=vlm_embed_dtype)
         flow_query = flow_query.to(device=device, dtype=vlm_embed_dtype)
         return act_query, flow_query
 

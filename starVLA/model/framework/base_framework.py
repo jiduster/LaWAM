@@ -38,6 +38,7 @@ def validate_full_checkpoint_state_dict(
     checkpoint_keys: set[str],
     framework_name: str,
     checkpoint_path: str | Path,
+    require_vlm_action_queries: bool = True,
 ) -> dict[str, int]:
     """Validate a latent-world init checkpoint.
 
@@ -52,7 +53,10 @@ def validate_full_checkpoint_state_dict(
         prefix: sum(1 for key in checkpoint_keys if key == prefix or key.startswith(prefix))
         for prefix in LATENT_WORLD_REQUIRED_PREFIXES
     }
-    missing_prefixes = [prefix for prefix, count in prefix_counts.items() if count == 0]
+    missing_prefixes = [
+        prefix for prefix, count in prefix_counts.items()
+        if count == 0 and (require_vlm_action_queries or prefix != "policy_backend.act_query")
+    ]
     is_vlm_only_checkpoint = (
         prefix_counts["policy_backend.vlm."] > 0
         and all(prefix_counts[prefix] == 0 for prefix in LATENT_WORLD_REQUIRED_PREFIXES if prefix != "policy_backend.vlm.")
@@ -71,12 +75,16 @@ def log_full_checkpoint_summary(
     checkpoint_path: str | Path,
     checkpoint_keys: set[str],
     prefix_counts: dict[str, int],
+    require_vlm_action_queries: bool = True,
 ) -> None:
     framework_name = str(framework_name).lower()
     if framework_name not in LATENT_WORLD_FRAMEWORK_NAMES:
         return
 
-    is_full_checkpoint = all(prefix_counts[prefix] > 0 for prefix in LATENT_WORLD_REQUIRED_PREFIXES)
+    is_full_checkpoint = all(
+        prefix_counts[prefix] > 0 for prefix in LATENT_WORLD_REQUIRED_PREFIXES
+        if require_vlm_action_queries or prefix != "policy_backend.act_query"
+    )
     checkpoint_kind = "Full checkpoint" if is_full_checkpoint else "VLM-only checkpoint"
     logger.info(
         "[LatentWorldPolicy] %s loaded | path=%s | total_keys=%d | %s=%d | %s=%d | %s=%d | %s=%d | %s=%d | %s=%d",
@@ -184,10 +192,13 @@ class baseframework(PreTrainedModel):
         model_keys = set(current_state_dict.keys())
         checkpoint_keys = set(model_state_dict.keys())
         framework_name = str(getattr(model_config.framework, "name", "")).lower()
+        policy_cfg = getattr(FrameworkModel, "policy_cfg", None)
+        require_vlm_action_queries = int(getattr(policy_cfg, "num_vlm_action_queries", 1)) > 0
         prefix_counts = validate_full_checkpoint_state_dict(
             checkpoint_keys=checkpoint_keys,
             framework_name=framework_name,
             checkpoint_path=pretrained_checkpoint,
+            require_vlm_action_queries=require_vlm_action_queries,
         )
         model_state_dict, dropped_lm_head_keys = _drop_removed_lm_head_unexpected_keys(
             model_state_dict=current_state_dict,
@@ -221,6 +232,7 @@ class baseframework(PreTrainedModel):
             checkpoint_path=pretrained_checkpoint,
             checkpoint_keys=checkpoint_keys,
             prefix_counts=prefix_counts,
+            require_vlm_action_queries=require_vlm_action_queries,
         )
 
         return FrameworkModel

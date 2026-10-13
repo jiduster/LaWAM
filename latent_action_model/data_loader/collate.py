@@ -9,6 +9,8 @@ def lam_collate(batch: Sequence[Dict], max_state_dim: int = 32) -> Dict[str, Any
 
     Input contract (upstream dataset must guarantee):
     - Each sample: {"frames": Tensor (T,C,H,W) uint8, "proprio": Tensor (T,D) float32, "embodiment_id": int}.
+      Samples without physical proprioception may provide proprio_valid as
+      a [T,D] false mask.
     - Within a batch: all samples have the same (T,C,H,W), same T for proprio.
       If D > max_state_dim, the proprio vector is truncated to the first max_state_dim dimensions.
 
@@ -76,7 +78,18 @@ def lam_collate(batch: Sequence[Dict], max_state_dim: int = 32) -> Dict[str, Any
         end = proprio[-1, :]
         states_t[i, 0, :D] = start
         states_t[i, 1, :D] = end
-        state_mask_t[i, :, :D] = True
+        state_valid = sample.get("proprio_valid")
+        if state_valid is None:
+            state_mask_t[i, :, :D] = True
+        else:
+            state_valid = torch.as_tensor(state_valid, dtype=torch.bool)
+            if state_valid.shape != proprio.shape:
+                raise ValueError(
+                    "Expected sample['proprio_valid'] to have shape [T,D], "
+                    f"got {tuple(state_valid.shape)} for proprio {tuple(proprio.shape)}."
+                )
+            state_mask_t[i, 0, :D] = state_valid[0]
+            state_mask_t[i, 1, :D] = state_valid[-1]
         delta_t[i, :D] = end - start
         proprio_mask_t[i, :D] = 1.0
 
@@ -92,6 +105,11 @@ def lam_collate(batch: Sequence[Dict], max_state_dim: int = 32) -> Dict[str, Any
                 raise ValueError(
                     "Expected fingertip_valid shape [T,N], "
                     f"got {tuple(valid.shape)} for positions {tuple(positions.shape)}."
+                )
+            if int(positions.shape[1]) != num_points:
+                raise ValueError(
+                    "All fingertip samples in a batch must use the same point count; "
+                    f"expected {num_points}, got {int(positions.shape[1])}."
                 )
             if positions.shape[0] < 2:
                 raise ValueError("Stage 1 fingertip supervision requires at least two temporal endpoints.")

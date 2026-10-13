@@ -340,6 +340,43 @@ def resize_images(images, target_size=(224, 224)):
 
 
 
+_ACTION_PROJECTION_EXPAND_SUFFIXES = (
+    "action_encoder.W1.W",
+    "action_decoder.layer2.W",
+    "action_decoder.layer2.b",
+)
+
+
+def expand_pretrained_action_projection(key: str, checkpoint_value, model_value):
+    """Copy a narrower pretrained action projection into a wider module.
+
+    ``action_encoder.W1.W`` is ``(num_embodiments, action_dim, hidden)``.
+    ``action_decoder.layer2.W`` is ``(num_embodiments, hidden, action_dim)`` and
+    its bias is ``(num_embodiments, action_dim)``. When only the action axis is
+    larger in the current model, keep the model's initialization on the new
+    channels and overwrite the pretrained prefix. Any other shape change is
+    left untouched so unrelated mismatches still fail closed.
+    """
+    if not any(key == suffix or key.endswith("." + suffix) for suffix in _ACTION_PROJECTION_EXPAND_SUFFIXES):
+        return None
+    if not hasattr(checkpoint_value, "shape") or not hasattr(model_value, "shape"):
+        return None
+
+    checkpoint_shape = tuple(checkpoint_value.shape)
+    model_shape = tuple(model_value.shape)
+    if len(checkpoint_shape) != len(model_shape) or not checkpoint_shape:
+        return None
+    if any(src > dst for src, dst in zip(checkpoint_shape, model_shape)):
+        return None
+    if sum(src != dst for src, dst in zip(checkpoint_shape, model_shape)) != 1:
+        return None
+
+    expanded = model_value.detach().clone()
+    prefix = tuple(slice(0, size) for size in checkpoint_shape)
+    expanded[prefix] = checkpoint_value.to(device=expanded.device, dtype=expanded.dtype)
+    return expanded
+
+
 class TrainerUtils:
     @staticmethod
     def freeze_backbones(model, freeze_modules=""):
@@ -510,16 +547,20 @@ class TrainerUtils:
         model_state_dict = model.state_dict()
         framework_cfg = getattr(getattr(model, "config", None), "framework", None)
         framework_name = str(getattr(framework_cfg, "name", "")).lower()
+        policy_cfg = getattr(model, "policy_cfg", None)
+        require_vlm_action_queries = int(getattr(policy_cfg, "num_vlm_action_queries", 1)) > 0
 
         prefix_counts = validate_full_checkpoint_state_dict(
             checkpoint_keys=checkpoint_keys,
             framework_name=framework_name,
             checkpoint_path=checkpoint_path,
+            require_vlm_action_queries=require_vlm_action_queries,
         )
 
         filtered_checkpoint = {}
         unexpected_keys = []
         incompatible_shapes = []
+        expanded_action_projections = []
         skipped_policy_flow_keys = []
         skipped_policy_lam_keys = []
         for key, value in checkpoint.items():
@@ -541,7 +582,12 @@ class TrainerUtils:
             model_value = model_state_dict[key]
             if hasattr(value, "shape") and hasattr(model_value, "shape"):
                 if tuple(value.shape) != tuple(model_value.shape):
-                    incompatible_shapes.append((key, tuple(value.shape), tuple(model_value.shape)))
+                    expanded = expand_pretrained_action_projection(key, value, model_value)
+                    if expanded is None:
+                        incompatible_shapes.append((key, tuple(value.shape), tuple(model_value.shape)))
+                        continue
+                    expanded_action_projections.append((key, tuple(value.shape), tuple(expanded.shape)))
+                    filtered_checkpoint[key] = expanded
                     continue
 
             filtered_checkpoint[key] = value
@@ -584,6 +630,17 @@ class TrainerUtils:
                 len(unexpected_keys),
                 sorted(unexpected_keys)[:10],
             )
+        if expanded_action_projections:
+            sample = [
+                f"{key}: ckpt{ckpt_shape} -> model{model_shape}"
+                for key, ckpt_shape, model_shape in expanded_action_projections
+            ]
+            _info(
+                "Relaxed finetune init expanded pretrained action projections for `%s`: count=%d sample=%s",
+                checkpoint_path,
+                len(expanded_action_projections),
+                sample,
+            )
         if incompatible_shapes:
             sample = [
                 f"{key}: ckpt{ckpt_shape} != model{model_shape}"
@@ -597,7 +654,7 @@ class TrainerUtils:
             )
         if intentionally_skipped_keys:
             _info(
-                "Relaxed finetune init kept `policy_backend.flow` at existing initialization for `%s`: count=%d sample=%s",
+                "Relaxed finetune init kept intentionally skipped weights at existing initialization for `%s`: count=%d sample=%s",
                 checkpoint_path,
                 len(intentionally_skipped_keys),
                 intentionally_skipped_keys[:10],
@@ -625,11 +682,21 @@ class TrainerUtils:
                 load_result.unexpected_keys[:10],
             )
 
+        if not require_vlm_action_queries:
+            head_keys = {key for key in model_state_dict if key.startswith("policy_backend.vlm_to_lam.")}
+            _info(
+                "External latent action head initialized from `%s`: loaded %d/%d tensors; no VLM latent queries.",
+                checkpoint_path,
+                len(head_keys.intersection(filtered_checkpoint)),
+                len(head_keys),
+            )
+
         log_full_checkpoint_summary(
             framework_name=framework_name,
             checkpoint_path=checkpoint_path,
             checkpoint_keys=checkpoint_keys,
             prefix_counts=prefix_counts,
+            require_vlm_action_queries=require_vlm_action_queries,
         )
         if (not dist.is_initialized()) or dist.get_rank() == 0:
             print("✅ relaxed full-model checkpoint loaded")

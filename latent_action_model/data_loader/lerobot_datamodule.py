@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 from .video_aug import LAM_IMAGE_HW
 from .collate import lam_collate
 from .lerobot_dataset import LeRobotLAMDataset
+from .egodex_dataset import EgoDexLAMDataset
 
 
 def _lam_worker_init_fn(_worker_id: int) -> None:
@@ -51,6 +52,12 @@ class LeRobotDataModule(LightningDataModule):
         debug_repeat_batch: Union[bool, int] = False,
         val_tail_ratio: float = 0.001,
         max_state_dim: int = 14,  # Maximum proprio dimension for padding
+        egodex_split: str = "train",
+        egodex_tasks: Optional[list[str]] = None,
+        egodex_fps: float = 30.0,
+        egodex_confidence_threshold: float = 0.5,
+        egodex_frame_stride: int = 1,
+        egodex_max_episodes_per_task: Optional[int] = None,
     ):
         super().__init__()
         if num_frames < 1:
@@ -83,44 +90,88 @@ class LeRobotDataModule(LightningDataModule):
         self.debug_repeat_batch = debug_repeat_batch
         self.val_tail_ratio = float(val_tail_ratio)
         self.max_state_dim = max_state_dim
+        self.egodex_split = str(egodex_split)
+        self.egodex_tasks = list(egodex_tasks) if egodex_tasks else None
+        self.egodex_fps = float(egodex_fps)
+        self.egodex_confidence_threshold = float(egodex_confidence_threshold)
+        self.egodex_frame_stride = int(egodex_frame_stride)
+        self.egodex_max_episodes_per_task = egodex_max_episodes_per_task
 
         self.train_dataset = None
         self.val_dataset = None
 
     def setup(self, stage: Optional[str] = None):
         if stage in (None, "fit"):
-            self.train_dataset = LeRobotLAMDataset(
+            dataset_cls = (
+                EgoDexLAMDataset
+                if str(self.data_mix).startswith("egodex")
+                else LeRobotLAMDataset
+            )
+            dataset_kwargs = dict(
                 data_root_dir=self.data_root_dir,
-                data_mix=self.data_mix,
                 num_frames=self.num_frames,
                 mode="train",
-                val_tail_ratio=self.val_tail_ratio,
-                video_backend=self.video_backend,
-                preferred_video_key=self.preferred_video_key,
-                state_keys=self.state_keys,
                 image_hw=self.image_hw,
                 frame_dt_sec=self.frame_dt_sec,
-                human_frame_dt_sec=self.human_frame_dt_sec,
-                fingertip_sidecar_root=self.fingertip_sidecar_root,
                 debug_repeat_batch=self.debug_repeat_batch,
             )
-        if stage in (None, "fit", "validate"):
-            if self.val_tail_ratio > 0:
-                self.val_dataset = LeRobotLAMDataset(
-                    data_root_dir=self.data_root_dir,
-                    data_mix=self.data_mix,
-                    num_frames=self.num_frames,
-                    mode="val",
+            if dataset_cls is EgoDexLAMDataset:
+                dataset_kwargs.update(
+                    split=self.egodex_split,
+                    tasks=self.egodex_tasks,
+                    fps=self.egodex_fps,
+                    max_state_dim=self.max_state_dim,
+                    confidence_threshold=self.egodex_confidence_threshold,
+                    frame_stride=self.egodex_frame_stride,
                     val_tail_ratio=self.val_tail_ratio,
+                    max_episodes_per_task=self.egodex_max_episodes_per_task,
+                )
+            else:
+                dataset_kwargs.update(
+                    data_mix=self.data_mix,
                     video_backend=self.video_backend,
                     preferred_video_key=self.preferred_video_key,
                     state_keys=self.state_keys,
-                    image_hw=self.image_hw,
-                    frame_dt_sec=self.frame_dt_sec,
                     human_frame_dt_sec=self.human_frame_dt_sec,
                     fingertip_sidecar_root=self.fingertip_sidecar_root,
+                )
+            self.train_dataset = dataset_cls(**dataset_kwargs)
+        if stage in (None, "fit", "validate"):
+            if self.val_tail_ratio > 0:
+                dataset_cls = (
+                    EgoDexLAMDataset
+                    if str(self.data_mix).startswith("egodex")
+                    else LeRobotLAMDataset
+                )
+                dataset_kwargs = dict(
+                    data_root_dir=self.data_root_dir,
+                    num_frames=self.num_frames,
+                    mode="val",
+                    image_hw=self.image_hw,
+                    frame_dt_sec=self.frame_dt_sec,
                     debug_repeat_batch=False,
                 )
+                if dataset_cls is EgoDexLAMDataset:
+                    dataset_kwargs.update(
+                        split=self.egodex_split,
+                        tasks=self.egodex_tasks,
+                        fps=self.egodex_fps,
+                        max_state_dim=self.max_state_dim,
+                        confidence_threshold=self.egodex_confidence_threshold,
+                        frame_stride=self.egodex_frame_stride,
+                        val_tail_ratio=self.val_tail_ratio,
+                        max_episodes_per_task=self.egodex_max_episodes_per_task,
+                    )
+                else:
+                    dataset_kwargs.update(
+                        data_mix=self.data_mix,
+                        video_backend=self.video_backend,
+                        preferred_video_key=self.preferred_video_key,
+                        state_keys=self.state_keys,
+                        human_frame_dt_sec=self.human_frame_dt_sec,
+                        fingertip_sidecar_root=self.fingertip_sidecar_root,
+                    )
+                self.val_dataset = dataset_cls(**dataset_kwargs)
             else:
                 self.val_dataset = None
 
