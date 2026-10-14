@@ -33,11 +33,20 @@ DATASET_NAMED_MIXTURES = {
         ("bimanual_microwave_cook", 1.0, "dexjoco_bimanual"),
         ("bimanual_unlock_ipad", 1.0, "dexjoco_bimanual"),
     ],
+    "dexjoco_bimanual_hanoi": [
+        ("bimanual_hanoi", 1.0, "dexjoco_bimanual"),
+    ],
     "dexjoco_bimanual_photograph": [
         ("bimanual_photograph", 1.0, "dexjoco_bimanual"),
     ],
+    "dexjoco_bimanual_assembly": [
+        ("bimanual_assembly", 1.0, "dexjoco_bimanual"),
+    ],
     "dexjoco_bimanual_microwave_cook": [
         ("bimanual_microwave_cook", 1.0, "dexjoco_bimanual"),
+    ],
+    "dexjoco_bimanual_unlock_ipad": [
+        ("bimanual_unlock_ipad", 1.0, "dexjoco_bimanual"),
     ],
     # Target-excluded Stage 1 adaptation mixture for bimanual_photograph.
     # Keep every bimanual task except all photograph variants.
