@@ -36,6 +36,9 @@ DATASET_NAMED_MIXTURES = {
     "dexjoco_bimanual_photograph": [
         ("bimanual_photograph", 1.0, "dexjoco_bimanual"),
     ],
+    "dexjoco_bimanual_microwave_cook": [
+        ("bimanual_microwave_cook", 1.0, "dexjoco_bimanual"),
+    ],
     # Target-excluded Stage 1 adaptation mixture for bimanual_photograph.
     # Keep every bimanual task except all photograph variants.
     "dexjoco_bimanual_exclude_photograph": [
