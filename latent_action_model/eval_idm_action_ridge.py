@@ -111,8 +111,9 @@ def build_dataset(args: argparse.Namespace, stride: int | None = None) -> tuple[
         state_keys=[STATE_KEY],
         include_action=True,
     )
+    dataset_name = getattr(args, "dataset_name", DATASET_NAME)
     dataset = LeRobotSingleDataset(
-        dataset_path=args.data_root / DATASET_NAME,
+        dataset_path=args.data_root / dataset_name,
         modality_configs=modality,
         embodiment_tag=ROBOT_TYPE_TO_EMBODIMENT_TAG[ROBOT_TYPE],
         mode="all",
@@ -199,7 +200,7 @@ def collect_windows(args: argparse.Namespace, dataset: LeRobotSingleDataset, str
 
 def cache_signature(bundle: dict, args: argparse.Namespace) -> dict:
     return {
-        "dataset": DATASET_NAME,
+        "dataset": getattr(args, "dataset_name", DATASET_NAME),
         "frame_dt_sec": float(args.frame_dt_sec),
         "fps": float(bundle["fps"]),
         "stride": int(bundle["stride"]),

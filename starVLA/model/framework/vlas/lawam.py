@@ -77,10 +77,15 @@ class LatentWorldPolicyConfig:
 
     # DexJoCo fingertip auxiliary prediction. The head is only constructed when
     # the loss weight is positive, so existing checkpoints remain compatible.
+    # "delta": full-horizon displacement from the current state-conditioned head.
+    # "endpoint": 8 fingertip positions at the last action-chunk frame, read only
+    # from the rolled-out future DINO tokens.
     fingertip_loss_weight: float = 0.0
     fingertip_num_points: int = 8
     fingertip_target_mode: str = "delta"
     fingertip_head_hidden_dim: int = 512
+    fingertip_target_scale: float = 0.1
+    fingertip_target_center: tuple[float, float, float] = (0.0, 0.0, 1.3)
 
     @property
     def num_vlm_action_queries(self) -> int:
@@ -255,23 +260,35 @@ class LatentWorldPolicyBackend(nn.Module):
         )
 
         self.fingertip_head: Optional[nn.Module] = None
+        self._fingertip_target_mode = str(self.model_cfg.fingertip_target_mode).lower()
         if float(self.model_cfg.fingertip_loss_weight) > 0.0:
             if int(self.model_cfg.fingertip_num_points) <= 0:
                 raise ValueError("fingertip_num_points must be positive when fingertip loss is enabled.")
-            if str(self.model_cfg.fingertip_target_mode).lower() != "delta":
+            if self._fingertip_target_mode not in {"delta", "endpoint"}:
                 raise ValueError(
-                    "Only fingertip_target_mode='delta' is implemented; absolute targets need separate normalization."
+                    "fingertip_target_mode must be 'delta' or 'endpoint', "
+                    f"got {self.model_cfg.fingertip_target_mode!r}."
                 )
-            state_dim = int(self.model_cfg.flow_cfg.state_dim)
+            if self._fingertip_target_mode == "endpoint" and not bool(self.model_cfg.future_prediction):
+                raise ValueError("fingertip_target_mode='endpoint' requires future_prediction=true.")
+            if self._fingertip_target_mode == "endpoint" and float(self.model_cfg.fingertip_target_scale) <= 0.0:
+                raise ValueError("fingertip_target_scale must be positive for endpoint fingertip loss.")
             hidden_dim = int(self.model_cfg.fingertip_head_hidden_dim)
             if hidden_dim <= 0:
                 raise ValueError("fingertip_head_hidden_dim must be positive.")
+            num_points = int(self.model_cfg.fingertip_num_points)
+            if self._fingertip_target_mode == "endpoint":
+                in_dim = int(self.lam.input_dim)
+                out_dim = num_points * 3
+            else:
+                in_dim = int(self.lam.input_dim) + int(self.model_cfg.flow_cfg.state_dim)
+                out_dim = int(self.model_cfg.action_horizon) * num_points * 3
             self.fingertip_head = nn.Sequential(
-                nn.Linear(int(self.lam.input_dim) + state_dim, hidden_dim),
+                nn.Linear(in_dim, hidden_dim),
                 nn.GELU(),
                 nn.Linear(hidden_dim, hidden_dim),
                 nn.GELU(),
-                nn.Linear(hidden_dim, int(self.model_cfg.action_horizon) * int(self.model_cfg.fingertip_num_points) * 3),
+                nn.Linear(hidden_dim, out_dim),
             )
 
         # 4) Align flow config to LAM output dimensions.
@@ -613,34 +630,65 @@ class LatentWorldPolicyBackend(nn.Module):
             return zero, zero
 
         expected_points = int(self.model_cfg.fingertip_num_points)
-        expected_horizon = int(self.model_cfg.action_horizon)
-        if fingertip_targets.ndim != 4 or fingertip_targets.shape[1:] != (expected_horizon, expected_points, 3):
+        if h_t1_pred.ndim != 3:
             raise ValueError(
-                "Invalid fingertip_targets shape: "
-                f"got={tuple(fingertip_targets.shape)}, expected=[B,{expected_horizon},{expected_points},3]."
+                "Expected rolled-out future DINO tokens [B,K,D], "
+                f"got {tuple(h_t1_pred.shape)}."
             )
-        if fingertip_valid.shape != fingertip_targets.shape[:3]:
-            raise ValueError(
-                "Invalid fingertip_valid shape: "
-                f"got={tuple(fingertip_valid.shape)}, expected={tuple(fingertip_targets.shape[:3])}."
-            )
-
-        # Mean-pool the predicted future LAM tokens and concatenate current state.
-        # This path keeps gradients through VLM-to-LAM and the trainable LAM
-        # decoder; future fingertip labels enter only as supervision.
+        # This tensor stays in the graph. The flow head reads the same rollout.
         h_summary = h_t1_pred.float().mean(dim=1)
-        state_float = state.float()
-        pred = self.fingertip_head(torch.cat([h_summary, state_float], dim=-1))
-        pred = pred.view(pred.shape[0], expected_horizon, expected_points, 3)
-        target = fingertip_targets.float()
+        if self._fingertip_target_mode == "endpoint":
+            if fingertip_targets.ndim != 3 or fingertip_targets.shape[1:] != (expected_points, 3):
+                raise ValueError(
+                    "Invalid endpoint fingertip_targets shape: "
+                    f"got={tuple(fingertip_targets.shape)}, expected=[B,{expected_points},3]."
+                )
+            if fingertip_valid.shape != fingertip_targets.shape[:2]:
+                raise ValueError(
+                    "Invalid endpoint fingertip_valid shape: "
+                    f"got={tuple(fingertip_valid.shape)}, expected={tuple(fingertip_targets.shape[:2])}."
+                )
+            center = self._fingertip_endpoint_center(h_summary)
+            scale = float(self.model_cfg.fingertip_target_scale)
+            pred = self.fingertip_head(h_summary).view(h_summary.shape[0], expected_points, 3)
+            target = (fingertip_targets.float() - center) / scale
+            pred_meter = pred * scale + center
+            target_meter = fingertip_targets.float()
+        else:
+            expected_horizon = int(self.model_cfg.action_horizon)
+            if fingertip_targets.ndim != 4 or fingertip_targets.shape[1:] != (expected_horizon, expected_points, 3):
+                raise ValueError(
+                    "Invalid fingertip_targets shape: "
+                    f"got={tuple(fingertip_targets.shape)}, expected=[B,{expected_horizon},{expected_points},3]."
+                )
+            if fingertip_valid.shape != fingertip_targets.shape[:3]:
+                raise ValueError(
+                    "Invalid fingertip_valid shape: "
+                    f"got={tuple(fingertip_valid.shape)}, expected={tuple(fingertip_targets.shape[:3])}."
+                )
+            pred = self.fingertip_head(torch.cat([h_summary, state.float()], dim=-1))
+            pred = pred.view(pred.shape[0], expected_horizon, expected_points, 3)
+            target = fingertip_targets.float()
+            pred_meter = pred
+            target_meter = target
         valid = fingertip_valid.to(device=pred.device, dtype=pred.dtype).unsqueeze(-1)
 
         error = F.smooth_l1_loss(pred, target, reduction="none")
         denom = valid.sum().clamp_min(1.0)
         loss = (error * valid).sum() / (denom * 3.0)
-        squared = ((pred - target) ** 2) * valid
+        squared = ((pred_meter - target_meter) ** 2) * valid
         rmse = torch.sqrt(squared.sum() / (denom * 3.0)).detach()
         return loss, rmse
+
+    def _fingertip_endpoint_center(self, like: torch.Tensor) -> torch.Tensor:
+        raw = self.model_cfg.fingertip_target_center
+        values = [float(value) for value in raw]
+        if len(values) != 3:
+            raise ValueError(
+                "fingertip_target_center must contain 3 ego-camera coordinates in meters, "
+                f"got {raw!r}."
+            )
+        return like.new_tensor(values).view(1, 1, 3)
 
     def _run_shared_encoding_core(
         self,

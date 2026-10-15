@@ -176,8 +176,19 @@ class LatentWorldTrainCollator:
                         "Fingertip horizon does not match action_horizon: "
                         f"tips={int(fingertip_positions.shape[0])}, action_horizon={window_size}."
                     )
-                fingertip_targets_list.append(fingertip_positions - fingertip_positions[:1])
-                fingertip_valid_list.append(fingertip_valid)
+                target_mode = str(getattr(self.policy_cfg, "fingertip_target_mode", "delta")).lower()
+                if target_mode == "endpoint":
+                    # Last action-chunk frame, aligned with the future DINO token.
+                    fingertip_targets_list.append(fingertip_positions[-1])
+                    fingertip_valid_list.append(fingertip_valid[-1])
+                elif target_mode == "delta":
+                    fingertip_targets_list.append(fingertip_positions - fingertip_positions[:1])
+                    fingertip_valid_list.append(fingertip_valid)
+                else:
+                    raise ValueError(
+                        "fingertip_target_mode must be 'delta' or 'endpoint', "
+                        f"got {target_mode!r}."
+                    )
 
             processed_primary_videos = primary_videos
             processed_wm_primary_video = wm_primary_video
