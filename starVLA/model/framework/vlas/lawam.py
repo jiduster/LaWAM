@@ -77,9 +77,10 @@ class LatentWorldPolicyConfig:
 
     # DexJoCo fingertip auxiliary prediction. The head is only constructed when
     # the loss weight is positive, so existing checkpoints remain compatible.
-    # "delta": full-horizon displacement from the current state-conditioned head.
-    # "endpoint": 8 fingertip positions at the last action-chunk frame, read only
-    # from the rolled-out future DINO tokens.
+    # "delta": full-horizon displacement from the state-conditioned future-DINO head.
+    # "endpoint": 8 absolute positions at the last action-chunk frame, from h_t1_pred.
+    # "latent_delta": Stage 1 loss moved onto the Stage 2 latent. The head reads the
+    # predicted latent and regresses the 8-tip displacement across that same chunk.
     fingertip_loss_weight: float = 0.0
     fingertip_num_points: int = 8
     fingertip_target_mode: str = "delta"
@@ -264,20 +265,24 @@ class LatentWorldPolicyBackend(nn.Module):
         if float(self.model_cfg.fingertip_loss_weight) > 0.0:
             if int(self.model_cfg.fingertip_num_points) <= 0:
                 raise ValueError("fingertip_num_points must be positive when fingertip loss is enabled.")
-            if self._fingertip_target_mode not in {"delta", "endpoint"}:
+            if self._fingertip_target_mode not in {"delta", "endpoint", "latent_delta"}:
                 raise ValueError(
-                    "fingertip_target_mode must be 'delta' or 'endpoint', "
+                    "fingertip_target_mode must be 'delta', 'endpoint', or 'latent_delta', "
                     f"got {self.model_cfg.fingertip_target_mode!r}."
                 )
             if self._fingertip_target_mode == "endpoint" and not bool(self.model_cfg.future_prediction):
                 raise ValueError("fingertip_target_mode='endpoint' requires future_prediction=true.")
-            if self._fingertip_target_mode == "endpoint" and float(self.model_cfg.fingertip_target_scale) <= 0.0:
-                raise ValueError("fingertip_target_scale must be positive for endpoint fingertip loss.")
+            if self._fingertip_target_mode in {"endpoint", "latent_delta"} and float(self.model_cfg.fingertip_target_scale) <= 0.0:
+                raise ValueError("fingertip_target_scale must be positive for this fingertip loss.")
             hidden_dim = int(self.model_cfg.fingertip_head_hidden_dim)
             if hidden_dim <= 0:
                 raise ValueError("fingertip_head_hidden_dim must be positive.")
             num_points = int(self.model_cfg.fingertip_num_points)
-            if self._fingertip_target_mode == "endpoint":
+            if self._fingertip_target_mode == "latent_delta":
+                # Same readout as Stage 1: one displacement vector from the latent code.
+                in_dim = int(self.lam.code_dim)
+                out_dim = num_points * 3
+            elif self._fingertip_target_mode == "endpoint":
                 in_dim = int(self.lam.input_dim)
                 out_dim = num_points * 3
             else:
@@ -621,6 +626,7 @@ class LatentWorldPolicyBackend(nn.Module):
         self,
         *,
         h_t1_pred: torch.Tensor,
+        pred_action_emb: torch.Tensor,
         state: torch.Tensor,
         fingertip_targets: torch.Tensor,
         fingertip_valid: torch.Tensor,
@@ -630,6 +636,40 @@ class LatentWorldPolicyBackend(nn.Module):
             return zero, zero
 
         expected_points = int(self.model_cfg.fingertip_num_points)
+        if self._fingertip_target_mode == "latent_delta":
+            # Stage 2's predicted latent, not the frozen IDM code and not h_t1_pred.
+            latent = pred_action_emb
+            if latent.ndim == 2:
+                latent = latent.unsqueeze(1)
+            if latent.ndim != 3:
+                raise ValueError(
+                    "Expected predicted latent [B,Q,D] for latent_delta, "
+                    f"got {tuple(pred_action_emb.shape)}."
+                )
+            if fingertip_targets.ndim != 3 or fingertip_targets.shape[1:] != (expected_points, 3):
+                raise ValueError(
+                    "Invalid latent_delta fingertip_targets shape: "
+                    f"got={tuple(fingertip_targets.shape)}, expected=[B,{expected_points},3]."
+                )
+            if fingertip_valid.shape != fingertip_targets.shape[:2]:
+                raise ValueError(
+                    "Invalid latent_delta fingertip_valid shape: "
+                    f"got={tuple(fingertip_valid.shape)}, expected={tuple(fingertip_targets.shape[:2])}."
+                )
+            scale = float(self.model_cfg.fingertip_target_scale)
+            z_summary = latent.float().mean(dim=1)
+            pred = self.fingertip_head(z_summary).view(z_summary.shape[0], expected_points, 3)
+            target_meter = fingertip_targets.float()
+            target = target_meter / scale
+            pred_meter = pred * scale
+            valid = fingertip_valid.to(device=pred.device, dtype=pred.dtype).unsqueeze(-1)
+            error = F.smooth_l1_loss(pred, target, reduction="none")
+            denom = valid.sum().clamp_min(1.0)
+            loss = (error * valid).sum() / (denom * 3.0)
+            squared = ((pred_meter - target_meter) ** 2) * valid
+            rmse = torch.sqrt(squared.sum() / (denom * 3.0)).detach()
+            return loss, rmse
+
         if h_t1_pred.ndim != 3:
             raise ValueError(
                 "Expected rolled-out future DINO tokens [B,K,D], "
@@ -824,6 +864,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 )
             loss_fingertip, fingertip_rmse = self._compute_fingertip_loss(
                 h_t1_pred=shared.h_t1_pred,
+                pred_action_emb=shared.pred_action_emb,
                 state=prepared_batch["state"],
                 fingertip_targets=fingertip_targets,
                 fingertip_valid=fingertip_valid,

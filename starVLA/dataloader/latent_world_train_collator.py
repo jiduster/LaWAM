@@ -181,12 +181,16 @@ class LatentWorldTrainCollator:
                     # Last action-chunk frame, aligned with the future DINO token.
                     fingertip_targets_list.append(fingertip_positions[-1])
                     fingertip_valid_list.append(fingertip_valid[-1])
+                elif target_mode == "latent_delta":
+                    # Displacement across the two frames the Stage 2 latent represents.
+                    fingertip_targets_list.append(fingertip_positions[-1] - fingertip_positions[0])
+                    fingertip_valid_list.append(fingertip_valid[0] & fingertip_valid[-1])
                 elif target_mode == "delta":
                     fingertip_targets_list.append(fingertip_positions - fingertip_positions[:1])
                     fingertip_valid_list.append(fingertip_valid)
                 else:
                     raise ValueError(
-                        "fingertip_target_mode must be 'delta' or 'endpoint', "
+                        "fingertip_target_mode must be 'delta', 'endpoint', or 'latent_delta', "
                         f"got {target_mode!r}."
                     )
 
