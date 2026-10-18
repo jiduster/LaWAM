@@ -219,6 +219,24 @@ class BasicTransformerBlock(nn.Module):
         return hidden_states
 
 
+class GeometryCrossAttention(nn.Module):
+    """Zero-initialized residual keeps pretrained actions unchanged at startup."""
+
+    def __init__(self, dim, context_dim, heads, head_dim):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.context_norm = nn.LayerNorm(context_dim)
+        self.attention = Attention(query_dim=dim, cross_attention_dim=context_dim, heads=heads, dim_head=head_dim)
+        nn.init.zeros_(self.attention.to_out[0].weight)
+        nn.init.zeros_(self.attention.to_out[0].bias)
+
+    def forward(self, hidden_states, geometry_tokens, hidden_attention_mask=None):
+        update = self.attention(self.norm(hidden_states), encoder_hidden_states=self.context_norm(geometry_tokens))
+        if hidden_attention_mask is not None:
+            update = update * hidden_attention_mask.unsqueeze(-1).to(update.dtype)
+        return hidden_states + update
+
+
 class DiT(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = False
 
@@ -242,6 +260,8 @@ class DiT(ModelMixin, ConfigMixin):
         final_dropout: bool = True,
         positional_embeddings: Optional[str] = None,
         interleave_self_attention=False,
+        geometry_conditioning: bool = False,
+        geometry_attention_every_n_blocks: int = 4,
         cross_attention_dim: Optional[int] = None,
     ):
         super().__init__()
@@ -286,6 +306,14 @@ class DiT(ModelMixin, ConfigMixin):
                 )
             ]
         self.transformer_blocks = nn.ModuleList(all_blocks)
+        self.geometry_blocks = nn.ModuleDict()
+        if geometry_conditioning:
+            if cross_attention_dim is None or not 1 <= geometry_attention_every_n_blocks <= num_layers:
+                raise ValueError("Geometry attention requires a context dimension and an interval within num_layers.")
+            self.geometry_blocks = nn.ModuleDict({
+                str(idx): GeometryCrossAttention(self.inner_dim, cross_attention_dim, num_attention_heads, attention_head_dim)
+                for idx in range(geometry_attention_every_n_blocks - 1, num_layers, geometry_attention_every_n_blocks)
+            })
 
         # Output blocks
         self.norm_out = nn.LayerNorm(self.inner_dim, elementwise_affine=False, eps=1e-6)
@@ -305,7 +333,10 @@ class DiT(ModelMixin, ConfigMixin):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_all_hidden_states: bool = False,
         hidden_positional_embeddings: Optional[torch.Tensor] = None,
+        geometry_tokens: Optional[torch.Tensor] = None,
     ):
+        if self.geometry_blocks and geometry_tokens is None:
+            raise ValueError("Geometry-enabled action expert requires predicted geometry_tokens.")
         # Encode timesteps
         temb = self.timestep_encoder(timestep)
 
@@ -336,6 +367,8 @@ class DiT(ModelMixin, ConfigMixin):
                     temb=temb,
                     hidden_positional_embeddings=hidden_positional_embeddings,
                 )
+            if str(idx) in self.geometry_blocks:
+                hidden_states = self.geometry_blocks[str(idx)](hidden_states, geometry_tokens, hidden_attention_mask)
             all_hidden_states.append(hidden_states)
 
         # Output processing
@@ -371,7 +404,10 @@ class AlternateVLDiT(DiT):
         image_mask: Optional[torch.Tensor] = None,
         vlm_mask: Optional[torch.Tensor] = None,    # [B, S], True=VLM tokens
         hidden_positional_embeddings: Optional[torch.Tensor] = None,
+        geometry_tokens: Optional[torch.Tensor] = None,
     ):
+        if self.geometry_blocks and geometry_tokens is None:
+            raise ValueError("Geometry-enabled action expert requires predicted geometry_tokens.")
         assert image_mask is not None and vlm_mask is not None, \
             "AlternateVLDiT requires image_mask and vlm_mask"
         
@@ -423,6 +459,8 @@ class AlternateVLDiT(DiT):
                     temb=temb,
                     hidden_positional_embeddings=hidden_positional_embeddings,
                 )
+            if str(idx) in self.geometry_blocks:
+                hidden_states = self.geometry_blocks[str(idx)](hidden_states, geometry_tokens, hidden_attention_mask)
             all_hidden_states.append(hidden_states)
         
         conditioning = temb

@@ -136,6 +136,9 @@ class LatentWorldTrainCollator:
         fingertip_targets_list: list[torch.Tensor] = []
         fingertip_valid_list: list[torch.Tensor] = []
         fingertip_enabled = float(getattr(self.policy_cfg, "fingertip_loss_weight", 0.0)) > 0.0
+        geometry_enabled = bool(getattr(self.policy_cfg, "geometry_conditioning", False))
+        geometry_targets_list: list[torch.Tensor] = []
+        geometry_valid_list: list[torch.Tensor] = []
         window_size = int(self.policy_cfg.action_horizon)
 
         for sample in features:
@@ -151,9 +154,9 @@ class LatentWorldTrainCollator:
 
             fingertip_positions = sample.get("fingertip_positions")
             fingertip_valid = sample.get("fingertip_valid")
-            if fingertip_enabled and (fingertip_positions is None or fingertip_valid is None):
+            if (fingertip_enabled or geometry_enabled) and (fingertip_positions is None or fingertip_valid is None):
                 raise KeyError(
-                    "Fingertip loss is enabled but a dataset sample has no fingertip sidecar data. "
+                    "Fingertip/geometry supervision is enabled but a dataset sample has no fingertip sidecar data. "
                     "Set datasets.vla_data.fingertip_sidecar_root and generate all episode sidecars."
                 )
             if fingertip_positions is not None or fingertip_valid is not None:
@@ -176,6 +179,12 @@ class LatentWorldTrainCollator:
                         "Fingertip horizon does not match action_horizon: "
                         f"tips={int(fingertip_positions.shape[0])}, action_horizon={window_size}."
                     )
+                if geometry_enabled:
+                    if fingertip_positions.shape[1] != 8:
+                        raise ValueError("Geometry conditioning expects eight tips: left then right, ff/mf/rf/th.")
+                    indices = list(self.policy_cfg.geometry_frame_indices)
+                    geometry_targets_list.append(fingertip_positions[indices])
+                    geometry_valid_list.append(fingertip_valid[indices] & torch.isfinite(fingertip_positions[indices]).all(-1))
                 target_mode = str(getattr(self.policy_cfg, "fingertip_target_mode", "delta")).lower()
                 if target_mode == "endpoint":
                     # Last action-chunk frame, aligned with the future DINO token.
@@ -288,4 +297,7 @@ class LatentWorldTrainCollator:
         if fingertip_enabled:
             batch["fingertip_targets"] = torch.stack(fingertip_targets_list, dim=0)
             batch["fingertip_valid"] = torch.stack(fingertip_valid_list, dim=0)
+        if geometry_enabled:
+            batch["geometry_targets"] = torch.stack(geometry_targets_list, dim=0)
+            batch["geometry_valid"] = torch.stack(geometry_valid_list, dim=0)
         return batch

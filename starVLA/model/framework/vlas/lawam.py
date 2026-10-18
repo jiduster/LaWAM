@@ -21,6 +21,7 @@ from starVLA.model.tools import sync_managed_modules_training_mode
 
 from .flowmatching_expert import ConditionalFlowMatchingConfig, ConditionalFlowMatchingHead
 from .latent_action_head import LatentActionHead as VLMToLAMQFormer
+from .future_hand_geometry import FutureHandGeometry, validate_geometry_config
 
 
 # ============================================================================
@@ -69,6 +70,10 @@ class LatentWorldPolicyConfig:
     flow_h_t1_pred_prob_end: float = 1.0
     flow_h_t1_pred_ramp_steps: int = 20000
     detach_future_feature: bool = False
+    # "predicted": flow reads the world model's future DINO tokens.
+    # "current": that slot is a copy of the current-frame DINO tokens. Perceptual
+    # and distill losses still train the world model; only the action condition changes.
+    flow_future_feature: str = "predicted"
 
     # Independent additions
     num_action_queries: int = 8
@@ -87,6 +92,15 @@ class LatentWorldPolicyConfig:
     fingertip_head_hidden_dim: int = 512
     fingertip_target_scale: float = 0.1
     fingertip_target_center: tuple[float, float, float] = (0.0, 0.0, 1.3)
+
+    # Multi-time absolute fingertip predictions condition the action flow directly.
+    geometry_conditioning: bool = False
+    geometry_inject: bool = True
+    geometry_frame_indices: tuple[int, ...] = (6, 15, 29)
+    geometry_loss_weight: float = 0.0
+    geometry_hidden_dim: int = 512
+    geometry_target_scale: float = 0.1
+    geometry_target_center: tuple[float, float, float] = (0.0, 0.0, 1.3)
 
     @property
     def num_vlm_action_queries(self) -> int:
@@ -221,6 +235,7 @@ class LatentWorldPolicyBackend(nn.Module):
     def __init__(self, model_cfg: LatentWorldPolicyConfig, *, vlm_model_id: str) -> None:
         super().__init__()
         self.model_cfg = model_cfg
+        validate_geometry_config(model_cfg)
         self.vlm_model_id = str(vlm_model_id)
         self.num_action_queries = int(self.model_cfg.num_vlm_action_queries)
 
@@ -317,10 +332,33 @@ class LatentWorldPolicyBackend(nn.Module):
             )
             self.model_cfg.flow_cfg.num_vision_tokens = lam_num_tokens
 
+        self.geometry_head = None
+        self.model_cfg.flow_cfg.geometry_conditioning = bool(self.model_cfg.geometry_conditioning and self.model_cfg.geometry_inject)
+        if self.model_cfg.geometry_conditioning:
+            self.geometry_head = FutureHandGeometry(
+                vision_dim=lam_vision_dim, state_dim=int(self.model_cfg.flow_cfg.state_dim),
+                hidden_dim=int(self.model_cfg.geometry_hidden_dim), token_dim=lam_vision_dim,
+                frame_indices=self.model_cfg.geometry_frame_indices,
+                center=self.model_cfg.geometry_target_center, scale=self.model_cfg.geometry_target_scale,
+                condition_actions=bool(self.model_cfg.geometry_inject),
+            )
+
         # 5) Flow head.
         self.flow = ConditionalFlowMatchingHead(config=self.model_cfg.flow_cfg)
         self.flow.action_horizon = int(self.model_cfg.action_horizon)
         self._flow_train_step: int = 0
+        flow_future_feature = str(self.model_cfg.flow_future_feature).lower()
+        if flow_future_feature not in {"predicted", "current"}:
+            raise ValueError(
+                "flow_future_feature must be 'predicted' or 'current', "
+                f"got {self.model_cfg.flow_future_feature!r}."
+            )
+        self.model_cfg.flow_future_feature = flow_future_feature
+        if flow_future_feature == "current":
+            print(
+                "[LatentWorldPolicyBackend] flow future feature is the current-frame DINO tokens. "
+                "Perceptual and distill losses still use the predicted future."
+            )
         if bool(self.model_cfg.enable_flow_h_t1_scheduled_sampling) and not bool(self.model_cfg.detach_future_feature):
             print(
                 "[LatentWorldPolicyBackend][warn] enable_flow_h_t1_scheduled_sampling=true and "
@@ -543,6 +581,7 @@ class LatentWorldPolicyBackend(nn.Module):
             self.flow,
             self.vlm_to_lam,
             self.fingertip_head,
+            self.geometry_head,
             mode=mode,
         )
 
@@ -587,6 +626,26 @@ class LatentWorldPolicyBackend(nn.Module):
 
         return cond_future
 
+    def _select_flow_future_feature(
+        self,
+        *,
+        h_t: torch.Tensor,
+        h_t1_pred: torch.Tensor,
+        h_t1_gt: torch.Tensor,
+    ) -> torch.Tensor:
+        """Choose the future-feature slot consumed by the action flow."""
+        if str(self.model_cfg.flow_future_feature).lower() == "predicted":
+            return self._build_flow_future_condition(h_t1_pred=h_t1_pred, h_t1_gt=h_t1_gt)
+        if h_t.shape != h_t1_pred.shape:
+            raise ValueError(
+                "[LatentWorldPolicyBackend] cannot replace future DINO features with the current frame: "
+                f"h_t={tuple(h_t.shape)}, h_t1_pred={tuple(h_t1_pred.shape)}."
+            )
+        # Same stop-grad contract as detach_future_feature. h_t is already a DINO feature.
+        if self.training and bool(self.model_cfg.detach_future_feature):
+            return h_t.detach()
+        return h_t
+
     # ------------------
     # Checkpoint IO
     # ------------------
@@ -621,6 +680,17 @@ class LatentWorldPolicyBackend(nn.Module):
 
     def _prepare_infer_batch(self, *, batch: LatentWorldPolicyInferBatch) -> LatentWorldPolicyInferBatch:
         return batch
+
+    def _predict_geometry(self, shared, prepared_batch):
+        if self.geometry_head is None:
+            return None, None
+        # Deliberately keep BC gradients through this path even when the original
+        # future-DINO flow condition uses detach_future_feature=true.
+        with _cuda_autocast(torch.float32):
+            return self.geometry_head(
+                shared.h_t1_pred, prepared_batch["state"],
+                prepared_batch["state_mask"], prepared_batch["action_hz"],
+            )
 
     def _compute_fingertip_loss(
         self,
@@ -874,6 +944,17 @@ class LatentWorldPolicyBackend(nn.Module):
             fingertip_rmse = torch.zeros((), device=device, dtype=torch.float32)
         fingertip_rmse_mm = fingertip_rmse * 1000.0
 
+        geometry_positions, geometry_tokens = self._predict_geometry(shared, prepared_batch)
+        loss_geometry = torch.zeros((), device=device, dtype=torch.float32)
+        geometry_rmse_mm = loss_geometry
+        geometry_valid_fraction = loss_geometry
+        if self.geometry_head is not None:
+            if "geometry_targets" not in prepared_batch or "geometry_valid" not in prepared_batch:
+                raise KeyError("Geometry conditioning requires geometry_targets/geometry_valid from fingertip sidecars.")
+            loss_geometry, geometry_rmse_mm, geometry_valid_fraction = self.geometry_head.supervised_loss(
+                geometry_positions, prepared_batch["geometry_targets"], prepared_batch["geometry_valid"],
+            )
+
         h_vlm_for_flow = _apply_flow_only_grad_to_h_vlm(
             h_vlm=shared.h_vlm,
             act_placeholder_mask=prepared_batch["act_placeholder_mask"],
@@ -886,7 +967,8 @@ class LatentWorldPolicyBackend(nn.Module):
             h_t_rep = shared.h_t.repeat(repeat_steps, *([1] * (shared.h_t.ndim - 1)))
             h_t1_pred_rep = shared.h_t1_pred.repeat(repeat_steps, *([1] * (shared.h_t1_pred.ndim - 1)))
             h_t1_gt_rep = shared.h_t1_gt.repeat(repeat_steps, *([1] * (shared.h_t1_gt.ndim - 1)))
-            h_t1_cond_rep = self._build_flow_future_condition(
+            h_t1_cond_rep = self._select_flow_future_feature(
+                h_t=h_t_rep,
                 h_t1_pred=h_t1_pred_rep,
                 h_t1_gt=h_t1_gt_rep,
             )
@@ -916,6 +998,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 state_mask=state_mask_rep,
                 actions_mask=actions_mask_rep,
                 attention_mask=attn_rep,
+                **({"geometry_tokens": geometry_tokens.repeat(repeat_steps, 1, 1)} if geometry_tokens is not None else {}),
             )
 
             loss_total = (
@@ -923,6 +1006,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 + self.model_cfg.perceptual_weight * loss_perceptual
                 + self.model_cfg.lam_encoder_distill_weight * loss_distill
                 + self.model_cfg.fingertip_loss_weight * loss_fingertip
+                + self.model_cfg.geometry_loss_weight * loss_geometry
             )
 
         zero = torch.tensor(0.0, device=device, dtype=loss_total.dtype)
@@ -934,6 +1018,9 @@ class LatentWorldPolicyBackend(nn.Module):
             "loss_fingertip": loss_fingertip,
             "fingertip_rmse": fingertip_rmse,
             "fingertip_rmse_mm": fingertip_rmse_mm,
+            "loss_geometry": loss_geometry,
+            "geometry_rmse_mm": geometry_rmse_mm,
+            "geometry_valid_fraction": geometry_valid_fraction,
             "loss_total": loss_total,
         }
 
@@ -965,10 +1052,16 @@ class LatentWorldPolicyBackend(nn.Module):
         )
         attn_flow = prepared_batch["attention_mask"] == 1
 
+        geometry_positions, geometry_tokens = self._predict_geometry(shared, prepared_batch)
+
         with _cuda_autocast(flow_stage_dtype):
+            if str(self.model_cfg.flow_future_feature).lower() == "current":
+                h_t1_for_flow = shared.h_t
+            else:
+                h_t1_for_flow = shared.h_t1_pred
             actions = self.flow.sample_actions_cfg(
                 h_t=shared.h_t,
-                h_t1_star=shared.h_t1_pred,
+                h_t1_star=h_t1_for_flow,
                 h_vlm=shared.h_vlm,
                 state=prepared_batch["state"],
                 state_mask=prepared_batch["state_mask"],
@@ -978,6 +1071,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 num_inference_steps=num_inference_steps,
                 attention_mask=attn_flow,
                 return_padded=bool(return_padded),
+                **({"geometry_tokens": geometry_tokens} if geometry_tokens is not None else {}),
             )
 
         if not return_intermediates:
@@ -992,4 +1086,7 @@ class LatentWorldPolicyBackend(nn.Module):
             "h_t1_pred": shared.h_t1_pred.detach().cpu(),
             "vision_tokens_hw": (hw, hw),
         }
+        if geometry_positions is not None:
+            intermediates["geometry_positions_m"] = self.geometry_head.positions_in_meters(geometry_positions).cpu()
+            intermediates["geometry_frame_indices"] = tuple(self.model_cfg.geometry_frame_indices)
         return actions, intermediates

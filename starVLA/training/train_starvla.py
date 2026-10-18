@@ -72,6 +72,9 @@ TRAIN_COMPONENT_METRIC_ALIASES = {
     "train_loss_fingertip": ("loss_fingertip",),
     "train_fingertip_rmse": ("fingertip_rmse",),
     "train_fingertip_rmse_mm": ("fingertip_rmse_mm",),
+    "train_loss_geometry": ("loss_geometry",),
+    "train_geometry_rmse_mm": ("geometry_rmse_mm",),
+    "train_geometry_valid_fraction": ("geometry_valid_fraction",),
 }
 
 def _accumulate_eval_scalar(metric_numerator: torch.Tensor, metric_denominator: torch.Tensor, value) -> None:
@@ -539,6 +542,10 @@ class VLATrainer(TrainerUtils):
         val_loss_perceptual_denominator = torch.zeros((), dtype=torch.float64, device=self.accelerator.device)
         val_loss_distill_numerator = torch.zeros((), dtype=torch.float64, device=self.accelerator.device)
         val_loss_distill_denominator = torch.zeros((), dtype=torch.float64, device=self.accelerator.device)
+        geometry_metrics = {
+            key: [torch.zeros((), dtype=torch.float64, device=self.accelerator.device) for _ in range(2)]
+            for key in ("loss_geometry", "geometry_rmse_mm", "geometry_valid_fraction")
+        }
         val_iter = iter(self.vla_val_dataloader)
         policy_backend = getattr(eval_model, "policy_backend", None)
         if policy_backend is not None and hasattr(policy_backend, "set_flow_train_step"):
@@ -568,6 +575,8 @@ class VLATrainer(TrainerUtils):
                             val_loss_distill_denominator,
                             eval_output_dict.get("loss_distill"),
                         )
+                        for key, (numerator, denominator) in geometry_metrics.items():
+                            _accumulate_eval_scalar(numerator, denominator, eval_output_dict.get(key))
 
                     try:
                         pred_actions, gt_actions, action_mask = (
@@ -608,8 +617,14 @@ class VLATrainer(TrainerUtils):
             dist.all_reduce(val_loss_perceptual_denominator, op=dist.ReduceOp.SUM)
             dist.all_reduce(val_loss_distill_numerator, op=dist.ReduceOp.SUM)
             dist.all_reduce(val_loss_distill_denominator, op=dist.ReduceOp.SUM)
+            for values in geometry_metrics.values():
+                for value in values:
+                    dist.all_reduce(value, op=dist.ReduceOp.SUM)
 
         if self.accelerator.is_main_process:
+            for key, (numerator, denominator) in geometry_metrics.items():
+                if denominator.item() > 0:
+                    step_metrics[f"val_{key}"] = float((numerator / denominator).item())
             if float(metric_denominator.item()) > 0:
                 val_mse_score = float((metric_numerator / metric_denominator).item())
                 step_metrics["val_mse_score"] = val_mse_score

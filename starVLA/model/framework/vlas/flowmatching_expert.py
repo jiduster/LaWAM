@@ -192,6 +192,8 @@ class ConditionalFlowMatchingConfig:
     noise_s: float = 0.999
     token_independent_noise: bool = False
     action_loss_weights: Optional[Tuple[float, ...]] = None
+    geometry_conditioning: bool = False
+    geometry_attention_every_n_blocks: int = 4
 
 
 class ConditionalFlowMatchingHead(nn.Module):
@@ -253,6 +255,9 @@ class ConditionalFlowMatchingHead(nn.Module):
         
         if self.config.use_alternate_vldit:
             dit_kwargs["attend_text_every_n_blocks"] = self.config.attend_text_every_n_blocks
+        if self.config.geometry_conditioning:
+            dit_kwargs["geometry_conditioning"] = True
+            dit_kwargs["geometry_attention_every_n_blocks"] = self.config.geometry_attention_every_n_blocks
         
         self.DiT = DiTClass(**dit_kwargs)
         self.cfg_embeddings = nn.Parameter(torch.randn(1, self.config.num_vision_tokens, self.config.vision_dim))
@@ -264,6 +269,15 @@ class ConditionalFlowMatchingHead(nn.Module):
 
     def _compute_dtype(self) -> torch.dtype:
         return self.action_encoder.W1.W.dtype
+
+    def _geometry_kwargs(self, geometry_tokens):
+        if not self.config.geometry_conditioning:
+            if geometry_tokens is not None:
+                raise ValueError("geometry_tokens supplied to a flow head without geometry conditioning.")
+            return {}
+        if geometry_tokens is None or geometry_tokens.ndim != 3 or geometry_tokens.shape[-1] != self.config.vision_dim:
+            raise ValueError("Geometry-conditioned flow requires tokens [B,K,vision_dim].")
+        return {"geometry_tokens": geometry_tokens.to(dtype=self._compute_dtype())}
 
     def _expand_future_tokens(
         self,
@@ -381,6 +395,7 @@ class ConditionalFlowMatchingHead(nn.Module):
         state_mask: torch.Tensor,  # [B, D]
         actions_mask: torch.Tensor,  # [B, T, K]
         attention_mask: Optional[torch.Tensor] = None,
+        geometry_tokens: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         model_dtype = self._compute_dtype()
         h_t = self._cast_if_needed(h_t, model_dtype)
@@ -455,10 +470,13 @@ class ConditionalFlowMatchingHead(nn.Module):
         cond_vlm = self.enc_vlm(h_vlm)  # [B, seq_len, vision_dim]
 
         bsz = h_t.shape[0]
+        geometry_kwargs = self._geometry_kwargs(geometry_tokens)
         cfg_future = self.cfg_embeddings.expand(bsz, -1, -1)
         if self.training and self.config.cfg_drop_prob > 0.0:
             mask = (torch.rand(bsz, device=device) < self.config.cfg_drop_prob).view(bsz, 1, 1)
             cond_future = torch.where(mask, cfg_future, h_t1_star)
+            if geometry_kwargs:
+                geometry_kwargs = {"geometry_tokens": geometry_kwargs["geometry_tokens"].masked_fill(mask, 0)}
         else:
             cond_future = h_t1_star
         if self.training:
@@ -545,6 +563,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                 vlm_mask=vlm_mask,
                 encoder_attention_mask=encoder_attention_mask,
                 hidden_positional_embeddings=hidden_positional_embeddings,
+                **geometry_kwargs,
             )
         else:
             dit_output = self.DiT(
@@ -554,6 +573,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                 hidden_attention_mask=hidden_attention_mask,
                 encoder_attention_mask=encoder_attention_mask,
                 hidden_positional_embeddings=hidden_positional_embeddings,
+                **geometry_kwargs,
             )
         
         # Decoder output is velocity directly, aligned with GR00T flow matching.
@@ -595,6 +615,7 @@ class ConditionalFlowMatchingHead(nn.Module):
         num_inference_steps: Optional[int] = None,
         attention_mask: Optional[torch.Tensor] = None,
         return_padded: bool = False,
+        geometry_tokens: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         device = h_t.device
         model_dtype = self._compute_dtype()
@@ -602,6 +623,8 @@ class ConditionalFlowMatchingHead(nn.Module):
         h_t1_star = self._cast_if_needed(h_t1_star, model_dtype)
         h_vlm = self._cast_if_needed(h_vlm, model_dtype)
         batch_size = h_t.shape[0]
+        geometry_kwargs = self._geometry_kwargs(geometry_tokens)
+        uncond_geometry_kwargs = {"geometry_tokens": torch.zeros_like(geometry_kwargs["geometry_tokens"])} if geometry_kwargs else {}
         action_hz_f = action_hz.to(device=device, dtype=torch.float32)
         if action_hz_f.ndim != 1 or action_hz_f.shape[0] != batch_size:
             raise ValueError(
@@ -744,6 +767,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                     vlm_mask=vlm_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     hidden_positional_embeddings=hidden_positional_embeddings,
+                    **geometry_kwargs,
                 )
                 pred_velocity_cond_all = self.action_decoder(model_output_cond, embodiment_id)
                 pred_velocity_cond = pred_velocity_cond_all[:, -action_horizon:, :]
@@ -758,6 +782,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                         vlm_mask=vlm_mask,
                         encoder_attention_mask=encoder_attention_mask,
                         hidden_positional_embeddings=hidden_positional_embeddings,
+                        **uncond_geometry_kwargs,
                     )
                     pred_velocity_uncond_all = self.action_decoder(model_output_uncond, embodiment_id)
                     pred_velocity_uncond = pred_velocity_uncond_all[:, -action_horizon:, :]
@@ -774,6 +799,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                     hidden_attention_mask=hidden_attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     hidden_positional_embeddings=hidden_positional_embeddings,
+                    **geometry_kwargs,
                 )
                 pred_velocity_cond_all = self.action_decoder(model_output_cond, embodiment_id)
                 pred_velocity_cond = pred_velocity_cond_all[:, -action_horizon:, :]
@@ -786,6 +812,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                         hidden_attention_mask=hidden_attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
                         hidden_positional_embeddings=hidden_positional_embeddings,
+                        **uncond_geometry_kwargs,
                     )
                     pred_velocity_uncond_all = self.action_decoder(model_output_uncond, embodiment_id)
                     pred_velocity_uncond = pred_velocity_uncond_all[:, -action_horizon:, :]

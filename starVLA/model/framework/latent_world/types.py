@@ -66,3 +66,5 @@ class LatentWorldPolicyTrainBatch(TypedDict):
     actions_mask: torch.Tensor
     fingertip_targets: NotRequired[torch.Tensor]
     fingertip_valid: NotRequired[torch.Tensor]
+    geometry_targets: NotRequired[torch.Tensor]
+    geometry_valid: NotRequired[torch.Tensor]
