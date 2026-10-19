@@ -236,8 +236,8 @@ class VLATrainer(TrainerUtils):
         # training status tracking
         self.completed_steps = 0
         self.total_batch_size = self._calculate_total_batch_size()
-        trackers = list(getattr(self.config, "trackers", [])) if hasattr(self.config, "trackers") else []
-        self.use_wandb = "wandb" in trackers if trackers else True
+        trackers = getattr(self.config, "trackers", None)
+        self.use_wandb = trackers is None or "wandb" in trackers
     
     def prepare_training(self):
         rank = dist.get_rank() if dist.is_initialized() else 0

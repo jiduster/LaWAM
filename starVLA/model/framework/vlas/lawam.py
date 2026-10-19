@@ -22,6 +22,7 @@ from starVLA.model.tools import sync_managed_modules_training_mode
 from .flowmatching_expert import ConditionalFlowMatchingConfig, ConditionalFlowMatchingHead
 from .latent_action_head import LatentActionHead as VLMToLAMQFormer
 from .future_hand_geometry import FutureHandGeometry, validate_geometry_config
+from .semantic_visual_anchors import SemanticVisualAnchors, validate_visual_anchor_config
 
 
 # ============================================================================
@@ -101,6 +102,13 @@ class LatentWorldPolicyConfig:
     geometry_hidden_dim: int = 512
     geometry_target_scale: float = 0.1
     geometry_target_center: tuple[float, float, float] = (0.0, 0.0, 1.3)
+
+    # Current-image DINO clusters; task/state conditioning is learned from BC.
+    visual_anchor_conditioning: bool = False
+    visual_anchor_num_tokens: int = 16
+    visual_anchor_hidden_dim: int = 256
+    visual_anchor_kmeans_iters: int = 4
+    visual_anchor_spatial_weight: float = 0.5
 
     @property
     def num_vlm_action_queries(self) -> int:
@@ -236,6 +244,7 @@ class LatentWorldPolicyBackend(nn.Module):
         super().__init__()
         self.model_cfg = model_cfg
         validate_geometry_config(model_cfg)
+        validate_visual_anchor_config(model_cfg)
         self.vlm_model_id = str(vlm_model_id)
         self.num_action_queries = int(self.model_cfg.num_vlm_action_queries)
 
@@ -342,6 +351,21 @@ class LatentWorldPolicyBackend(nn.Module):
                 center=self.model_cfg.geometry_target_center, scale=self.model_cfg.geometry_target_scale,
                 condition_actions=bool(self.model_cfg.geometry_inject),
             )
+
+        self.visual_anchor_head = None
+        self.model_cfg.flow_cfg.anchor_conditioning = bool(self.model_cfg.visual_anchor_conditioning)
+        if self.model_cfg.visual_anchor_conditioning:
+            self.visual_anchor_head = SemanticVisualAnchors(
+                vision_dim=lam_vision_dim, vlm_dim=int(self.model_cfg.flow_cfg.vlm_dim),
+                state_dim=int(self.model_cfg.flow_cfg.state_dim), token_dim=lam_vision_dim,
+                grid_height=lam_grid_h, grid_width=lam_grid_w,
+                num_tokens=int(self.model_cfg.visual_anchor_num_tokens),
+                hidden_dim=int(self.model_cfg.visual_anchor_hidden_dim),
+                kmeans_iters=int(self.model_cfg.visual_anchor_kmeans_iters),
+                spatial_weight=float(self.model_cfg.visual_anchor_spatial_weight),
+            )
+            print(f"[LatentWorldPolicyBackend] Visual anchors enabled: {self.model_cfg.visual_anchor_num_tokens} "
+                  "current-frame 2D DINO regions; task/state conditioning; independent action cross-attention.")
 
         # 5) Flow head.
         self.flow = ConditionalFlowMatchingHead(config=self.model_cfg.flow_cfg)
@@ -582,6 +606,7 @@ class LatentWorldPolicyBackend(nn.Module):
             self.vlm_to_lam,
             self.fingertip_head,
             self.geometry_head,
+            self.visual_anchor_head,
             mode=mode,
         )
 
@@ -680,6 +705,16 @@ class LatentWorldPolicyBackend(nn.Module):
 
     def _prepare_infer_batch(self, *, batch: LatentWorldPolicyInferBatch) -> LatentWorldPolicyInferBatch:
         return batch
+
+    def _predict_visual_anchors(self, shared, prepared_batch):
+        if self.visual_anchor_head is None:
+            return None, {}
+        with _cuda_autocast(torch.float32):
+            return self.visual_anchor_head(
+                current_features=shared.h_t_original, semantic_features=shared.h_vlm,
+                semantic_mask=prepared_batch["attention_mask"] == 1,
+                state=prepared_batch["state"], state_mask=prepared_batch["state_mask"],
+            )
 
     def _predict_geometry(self, shared, prepared_batch):
         if self.geometry_head is None:
@@ -945,6 +980,7 @@ class LatentWorldPolicyBackend(nn.Module):
         fingertip_rmse_mm = fingertip_rmse * 1000.0
 
         geometry_positions, geometry_tokens = self._predict_geometry(shared, prepared_batch)
+        anchor_tokens, _ = self._predict_visual_anchors(shared, prepared_batch)
         loss_geometry = torch.zeros((), device=device, dtype=torch.float32)
         geometry_rmse_mm = loss_geometry
         geometry_valid_fraction = loss_geometry
@@ -999,6 +1035,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 actions_mask=actions_mask_rep,
                 attention_mask=attn_rep,
                 **({"geometry_tokens": geometry_tokens.repeat(repeat_steps, 1, 1)} if geometry_tokens is not None else {}),
+                **({"anchor_tokens": anchor_tokens.repeat(repeat_steps, 1, 1)} if anchor_tokens is not None else {}),
             )
 
             loss_total = (
@@ -1053,6 +1090,7 @@ class LatentWorldPolicyBackend(nn.Module):
         attn_flow = prepared_batch["attention_mask"] == 1
 
         geometry_positions, geometry_tokens = self._predict_geometry(shared, prepared_batch)
+        anchor_tokens, anchor_info = self._predict_visual_anchors(shared, prepared_batch)
 
         with _cuda_autocast(flow_stage_dtype):
             if str(self.model_cfg.flow_future_feature).lower() == "current":
@@ -1072,6 +1110,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 attention_mask=attn_flow,
                 return_padded=bool(return_padded),
                 **({"geometry_tokens": geometry_tokens} if geometry_tokens is not None else {}),
+                **({"anchor_tokens": anchor_tokens} if anchor_tokens is not None else {}),
             )
 
         if not return_intermediates:
@@ -1089,4 +1128,5 @@ class LatentWorldPolicyBackend(nn.Module):
         if geometry_positions is not None:
             intermediates["geometry_positions_m"] = self.geometry_head.positions_in_meters(geometry_positions).cpu()
             intermediates["geometry_frame_indices"] = tuple(self.model_cfg.geometry_frame_indices)
+        intermediates.update({key: value.detach().cpu() for key, value in anchor_info.items()})
         return actions, intermediates

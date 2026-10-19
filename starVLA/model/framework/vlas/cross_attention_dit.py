@@ -262,6 +262,8 @@ class DiT(ModelMixin, ConfigMixin):
         interleave_self_attention=False,
         geometry_conditioning: bool = False,
         geometry_attention_every_n_blocks: int = 4,
+        anchor_conditioning: bool = False,
+        anchor_attention_every_n_blocks: int = 4,
         cross_attention_dim: Optional[int] = None,
     ):
         super().__init__()
@@ -316,6 +318,15 @@ class DiT(ModelMixin, ConfigMixin):
             })
 
         # Output blocks
+        self.anchor_blocks = nn.ModuleDict()
+        if anchor_conditioning:
+            if cross_attention_dim is None or not 1 <= anchor_attention_every_n_blocks <= num_layers:
+                raise ValueError("Anchor attention requires a context dimension and an interval within num_layers.")
+            self.anchor_blocks = nn.ModuleDict({
+                str(idx): GeometryCrossAttention(self.inner_dim, cross_attention_dim, num_attention_heads, attention_head_dim)
+                for idx in range(anchor_attention_every_n_blocks - 1, num_layers, anchor_attention_every_n_blocks)
+            })
+
         self.norm_out = nn.LayerNorm(self.inner_dim, elementwise_affine=False, eps=1e-6)
         self.proj_out_1 = nn.Linear(self.inner_dim, 2 * self.inner_dim)
         self.proj_out_2 = nn.Linear(self.inner_dim, self.output_dim)
@@ -334,9 +345,12 @@ class DiT(ModelMixin, ConfigMixin):
         return_all_hidden_states: bool = False,
         hidden_positional_embeddings: Optional[torch.Tensor] = None,
         geometry_tokens: Optional[torch.Tensor] = None,
+        anchor_tokens: Optional[torch.Tensor] = None,
     ):
         if self.geometry_blocks and geometry_tokens is None:
             raise ValueError("Geometry-enabled action expert requires predicted geometry_tokens.")
+        if self.anchor_blocks and anchor_tokens is None:
+            raise ValueError("Anchor-enabled action expert requires anchor_tokens.")
         # Encode timesteps
         temb = self.timestep_encoder(timestep)
 
@@ -369,6 +383,8 @@ class DiT(ModelMixin, ConfigMixin):
                 )
             if str(idx) in self.geometry_blocks:
                 hidden_states = self.geometry_blocks[str(idx)](hidden_states, geometry_tokens, hidden_attention_mask)
+            if str(idx) in self.anchor_blocks:
+                hidden_states = self.anchor_blocks[str(idx)](hidden_states, anchor_tokens, hidden_attention_mask)
             all_hidden_states.append(hidden_states)
 
         # Output processing
@@ -405,9 +421,12 @@ class AlternateVLDiT(DiT):
         vlm_mask: Optional[torch.Tensor] = None,    # [B, S], True=VLM tokens
         hidden_positional_embeddings: Optional[torch.Tensor] = None,
         geometry_tokens: Optional[torch.Tensor] = None,
+        anchor_tokens: Optional[torch.Tensor] = None,
     ):
         if self.geometry_blocks and geometry_tokens is None:
             raise ValueError("Geometry-enabled action expert requires predicted geometry_tokens.")
+        if self.anchor_blocks and anchor_tokens is None:
+            raise ValueError("Anchor-enabled action expert requires anchor_tokens.")
         assert image_mask is not None and vlm_mask is not None, \
             "AlternateVLDiT requires image_mask and vlm_mask"
         
@@ -461,6 +480,8 @@ class AlternateVLDiT(DiT):
                 )
             if str(idx) in self.geometry_blocks:
                 hidden_states = self.geometry_blocks[str(idx)](hidden_states, geometry_tokens, hidden_attention_mask)
+            if str(idx) in self.anchor_blocks:
+                hidden_states = self.anchor_blocks[str(idx)](hidden_states, anchor_tokens, hidden_attention_mask)
             all_hidden_states.append(hidden_states)
         
         conditioning = temb

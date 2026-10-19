@@ -105,6 +105,10 @@ def diagnose_train_batch(
         "gt_future": shared.h_t1_gt,
     }
     geometry_kwargs = {}
+    anchor_kwargs = {}
+    if getattr(backend, "visual_anchor_head", None) is not None:
+        tokens, _ = backend._predict_visual_anchors(shared, prepared)
+        anchor_kwargs = {"anchor_tokens": tokens}
     if getattr(backend, "geometry_head", None) is not None and backend.flow.config.geometry_conditioning:
         # Replace the visual and explicit geometry conditions consistently in
         # geometry-enabled policies; oracle labels still never enter this head.
@@ -147,6 +151,7 @@ def diagnose_train_batch(
                         attention_mask=prepared["attention_mask"] == 1,
                         return_padded=True,
                         **geometry_kwargs.get(name, {}),
+                        **anchor_kwargs,
                     )
             if reference_actions is None:
                 reference_actions = actions
