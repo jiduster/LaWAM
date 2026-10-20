@@ -15,7 +15,7 @@ def map_policy_train_output(policy_output: Dict[str, torch.Tensor]) -> Dict[str,
         "loss_fingertip": policy_output["loss_fingertip"],
         "fingertip_rmse": policy_output["fingertip_rmse"],
         "fingertip_rmse_mm": policy_output["fingertip_rmse_mm"],
-        **{key: policy_output[key] for key in ("loss_geometry", "geometry_rmse_mm", "geometry_valid_fraction") if key in policy_output},
+        **({"loss_depth": policy_output["loss_depth"]} if "loss_depth" in policy_output else {}),
     }
 
 

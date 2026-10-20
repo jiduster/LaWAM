@@ -119,6 +119,10 @@ class LatentWorldPolicyRunner:
             "image_grid_thw": train_batch["image_grid_thw"],
         }
 
+        for key in ("contact_geometry", "depth_placeholder_mask"):
+            if key in train_batch:
+                infer_batch[key] = train_batch[key]
+
         pred_actions = self.policy_backend.predict_action(
             batch=infer_batch,
             return_padded=True,

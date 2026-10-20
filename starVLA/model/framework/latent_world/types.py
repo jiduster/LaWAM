@@ -23,6 +23,9 @@ class LatentWorldPolicyTrainRawSample(TypedDict):
     action_hz: float
     fingertip_positions: NotRequired[torch.Tensor]
     fingertip_valid: NotRequired[torch.Tensor]
+    episode_index: NotRequired[int]
+    frame_index: NotRequired[int]
+    dataset_name: NotRequired[str]
 
 
 class LatentWorldPolicyInferExample(TypedDict, total=False):
@@ -34,6 +37,7 @@ class LatentWorldPolicyInferExample(TypedDict, total=False):
     state: NotRequired[TensorLike2D]
     state_mask: NotRequired[TensorLike2D]
     wrist_image: NotRequired[ImageViews]
+    contact_geometry: NotRequired[TensorLike2D]
 
 
 class LatentWorldPolicyInferBatch(TypedDict):
@@ -43,11 +47,13 @@ class LatentWorldPolicyInferBatch(TypedDict):
     act_placeholder_mask: torch.Tensor
     flow_placeholder_mask: torch.Tensor
     primary_image: torch.Tensor
+    contact_geometry: NotRequired[torch.Tensor]
     state: torch.Tensor
     state_mask: torch.Tensor
     embodiment_id: torch.Tensor
     action_hz: torch.Tensor
     image_grid_thw: Optional[torch.Tensor]
+    depth_placeholder_mask: NotRequired[torch.Tensor]
 
 
 class LatentWorldPolicyTrainBatch(TypedDict):
@@ -57,6 +63,7 @@ class LatentWorldPolicyTrainBatch(TypedDict):
     act_placeholder_mask: torch.Tensor
     flow_placeholder_mask: torch.Tensor
     primary_video: torch.Tensor
+    contact_geometry: NotRequired[torch.Tensor]
     state: torch.Tensor
     state_mask: torch.Tensor
     embodiment_id: torch.Tensor
@@ -66,5 +73,5 @@ class LatentWorldPolicyTrainBatch(TypedDict):
     actions_mask: torch.Tensor
     fingertip_targets: NotRequired[torch.Tensor]
     fingertip_valid: NotRequired[torch.Tensor]
-    geometry_targets: NotRequired[torch.Tensor]
-    geometry_valid: NotRequired[torch.Tensor]
+    depth_placeholder_mask: NotRequired[torch.Tensor]
+    depth_targets: NotRequired[torch.Tensor]

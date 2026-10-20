@@ -4,6 +4,7 @@ import copy
 import json
 import tempfile
 import unittest
+from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,6 +17,7 @@ from starVLA.dataloader import _build_latent_world_collator
 from starVLA.model.framework.base_framework import baseframework, validate_full_checkpoint_state_dict
 from starVLA.model.framework.latent_world.batch_builder import LatentWorldPolicyInferBatchBuilder
 from starVLA.model.framework.latent_world.config_builder import LatentWorldPolicyConfigBuilder
+from starVLA.model.framework.latent_world.runtime.output_mapper import map_policy_train_output
 from starVLA.model.framework.latent_world.vlm_adapter import LatentWorldPolicyVLMAdapter
 from starVLA.model.framework.vlas.flowmatching_expert import ConditionalFlowMatchingConfig
 from starVLA.model.framework.vlas.latent_action_head import LatentActionHead
@@ -106,7 +108,7 @@ class TinyLAM(nn.Module):
         return {"quantized": self.latent_encoder(delta).unsqueeze(1)}
 
 
-def build_tiny_backend(mode="external_qformer"):
+def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mode=None, contact=False):
     cfg = LatentWorldPolicyConfig(
         latent_action_head_type=mode,
         future_action_window_size=3,
@@ -116,7 +118,11 @@ def build_tiny_backend(mode="external_qformer"):
         lam_encoder_distill_weight=0.1,
         detach_future_feature=True,
         repeated_diffusion_steps=1,
+        fingertip_loss_weight=0.05 if fingertip_mode else 0.0,
+        fingertip_target_mode=fingertip_mode or "delta",
         flow_cfg=ConditionalFlowMatchingConfig(
+            contact_conditioning=contact,
+            contact_every_n_blocks=2,
             action_dim=44,
             state_dim=46,
             vlm_dim=32,
@@ -126,14 +132,14 @@ def build_tiny_backend(mode="external_qformer"):
             num_layers=2,
             attention_heads=4,
             horizon_sec=0.15,
-            use_alternate_vldit=True,
+            use_alternate_vldit=alternate,
             num_inference_steps=2,
         ),
     )
     processor = TinyProcessor()
     with patch(
         "starVLA.model.framework.vlas.lawam._load_vlm_and_processor",
-        return_value=(TinyVLM(), processor, None, 99),
+        return_value=(TinyVLM(), processor, None, 99, None),
     ), patch("starVLA.model.framework.vlas.lawam.load_latent_action_model", return_value=TinyLAM()):
         return LatentWorldPolicyBackend(cfg, vlm_model_id="unused")
 
@@ -280,6 +286,45 @@ class ExternalLatentActionHeadTests(unittest.TestCase):
                 infer_batch["primary_image"] = batch["primary_video"][:, 0]
                 actions = backend.predict_action(batch=infer_batch, num_inference_steps=2)
                 self.assertEqual(actions.shape, (2, 4, 44))
+                self.assertTrue(torch.isfinite(actions).all())
+
+    def test_retired_conditioning_fields_are_rejected_and_depth_config_builds(self):
+        for config_type in (LatentWorldPolicyConfig, ConditionalFlowMatchingConfig):
+            self.assertFalse(any(field.name.startswith("geometry_") for field in fields(config_type)))
+        for location, key in (("action_model", "geometry_conditioning"), ("flow_cfg", "geometry_attention_every_n_blocks")):
+            cfg = OmegaConf.load(CONFIG_PATH)
+            target = cfg.framework.action_model
+            if location == "flow_cfg":
+                target = target.flow_cfg
+            target[key] = True if key.endswith("conditioning") else 4
+            with self.assertRaisesRegex(ValueError, "Unknown.*" + key):
+                LatentWorldPolicyConfigBuilder(cfg).build()
+        cfg = OmegaConf.load(CONFIG_PATH.with_name("starvla_train_dexjoco_bimanual_photograph_C_h30_depth_queries.yaml"))
+        self.assertTrue(LatentWorldPolicyConfigBuilder(cfg).build().depth_query_conditioning)
+
+    def test_plain_dit_and_fingertip_auxiliary_modes_still_work(self):
+        for mode in (None, "delta", "endpoint", "latent_delta"):
+            with self.subTest(fingertip_mode=mode):
+                backend = build_tiny_backend(alternate=False, fingertip_mode=mode)
+                self.assertFalse(any("geometry" in key for key in backend.state_dict()))
+                sample = raw_sample()
+                if mode:
+                    sample["fingertip_positions"] = torch.randn(4, 8, 3) * 0.01
+                    sample["fingertip_valid"] = torch.ones(4, 8, dtype=torch.bool)
+                batch = collate(backend, [sample])
+                self.assertFalse(any(key.startswith("geometry_") for key in batch))
+                losses = backend(batch=batch)
+                losses["loss_total"].backward()
+                if mode:
+                    self.assertGreater(backend.fingertip_head[-1].weight.grad.abs().sum().item(), 0)
+                losses["loss_depth"] = torch.tensor(0.25)
+                mapped = map_policy_train_output(losses)
+                self.assertEqual(mapped["loss_depth"].item(), 0.25)
+                self.assertFalse(any("geometry" in key for key in mapped))
+                backend.eval()
+                infer_batch = dict(batch, primary_image=batch["primary_video"][:, 0])
+                actions = backend.predict_action(batch=infer_batch, guidance_scale=1.5)
+                self.assertEqual(actions.shape, (1, 4, 44))
                 self.assertTrue(torch.isfinite(actions).all())
 
     def test_head_modes_are_validated_before_loading_models(self):

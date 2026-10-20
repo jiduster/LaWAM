@@ -2976,6 +2976,9 @@ class LeRobotMixtureDataset(Dataset):
             "action": self._ensure_sequence_2d_tensor(data["action"]),
             "embodiment_id": int(dataset.embodiment_id),
             "action_hz": float(dataset.action_hz),
+            "episode_index": int(trajectory_id),
+            "frame_index": int(base_index),
+            "dataset_name": dataset.dataset_name,
         }
         fingertip_data = dataset.get_fingertip_data(trajectory_id, base_index)
         if fingertip_data is not None:

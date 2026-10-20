@@ -104,20 +104,6 @@ def diagnose_train_batch(
         "teacher_latent": teacher_future,
         "gt_future": shared.h_t1_gt,
     }
-    geometry_kwargs = {}
-    anchor_kwargs = {}
-    if getattr(backend, "visual_anchor_head", None) is not None:
-        tokens, _ = backend._predict_visual_anchors(shared, prepared)
-        anchor_kwargs = {"anchor_tokens": tokens}
-    if getattr(backend, "geometry_head", None) is not None and backend.flow.config.geometry_conditioning:
-        # Replace the visual and explicit geometry conditions consistently in
-        # geometry-enabled policies; oracle labels still never enter this head.
-        for name, future in futures.items():
-            with _autocast(device, torch.float32):
-                _, tokens = backend.geometry_head(
-                    future, prepared["state"], prepared["state_mask"], prepared["action_hz"],
-                )
-            geometry_kwargs[name] = {"geometry_tokens": tokens}
     for name, future in {**futures, "current": shared.h_t}.items():
         metrics[f"future_mse/{name}"] = _mse_per_sample(future, shared.h_t1_gt)
 
@@ -149,9 +135,8 @@ def diagnose_train_batch(
                         cfg_scale=guidance_scale,
                         num_inference_steps=num_inference_steps,
                         attention_mask=prepared["attention_mask"] == 1,
+                        contact_geometry=prepared.get("contact_geometry"),
                         return_padded=True,
-                        **geometry_kwargs.get(name, {}),
-                        **anchor_kwargs,
                     )
             if reference_actions is None:
                 reference_actions = actions

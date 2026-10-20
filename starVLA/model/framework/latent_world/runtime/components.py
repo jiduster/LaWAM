@@ -42,6 +42,10 @@ def build_policy_components(config: Any) -> LatentWorldPolicyComponents:
         placeholder_token=policy_cfg.latent_action_placeholder_token,
         act_queries=int(policy_backend.num_action_queries),
         flow_queries=int(policy_backend.flow_action_query.shape[0]),
+        depth_queries_per_view=(
+            int(policy_cfg.depth_num_task_tokens) if bool(policy_cfg.depth_query_conditioning) else 0
+        ),
+        depth_placeholder_token=str(policy_cfg.depth_placeholder_token),
     )
     infer_batch_builder = LatentWorldPolicyInferBatchBuilder(
         policy_cfg=policy_cfg,

@@ -174,7 +174,7 @@ def make_LeRobotSingleDataset(
         transforms = data_config.transform(image_hw=transform_image_hw)
     except TypeError:
         transforms = data_config.transform()
-    dataset_path = data_root_dir / data_name
+    dataset_path = Path(data_root_dir) / data_name
     if robot_type not in ROBOT_TYPE_TO_EMBODIMENT_TAG:
         available_robot_types = sorted(ROBOT_TYPE_TO_EMBODIMENT_TAG.keys())
         raise ValueError(

@@ -19,10 +19,15 @@ from .vlm_auto import (
 )
 from starVLA.model.tools import sync_managed_modules_training_mode
 
+from .depth_queries import (
+    TaskTokenDepthHead,
+    build_depth_query_attention_mask,
+    depth_placeholder_spans,
+    gather_depth_contexts,
+    image_token_spans,
+)
 from .flowmatching_expert import ConditionalFlowMatchingConfig, ConditionalFlowMatchingHead
 from .latent_action_head import LatentActionHead as VLMToLAMQFormer
-from .future_hand_geometry import FutureHandGeometry, validate_geometry_config
-from .semantic_visual_anchors import SemanticVisualAnchors, validate_visual_anchor_config
 
 
 # ============================================================================
@@ -88,27 +93,29 @@ class LatentWorldPolicyConfig:
     # "latent_delta": Stage 1 loss moved onto the Stage 2 latent. The head reads the
     # predicted latent and regresses the 8-tip displacement across that same chunk.
     fingertip_loss_weight: float = 0.0
+    contact_sidecar_root: str = ""
     fingertip_num_points: int = 8
     fingertip_target_mode: str = "delta"
     fingertip_head_hidden_dim: int = 512
     fingertip_target_scale: float = 0.1
     fingertip_target_center: tuple[float, float, float] = (0.0, 0.0, 1.3)
 
-    # Multi-time absolute fingertip predictions condition the action flow directly.
-    geometry_conditioning: bool = False
-    geometry_inject: bool = True
-    geometry_frame_indices: tuple[int, ...] = (6, 15, 29)
-    geometry_loss_weight: float = 0.0
-    geometry_hidden_dim: int = 512
-    geometry_target_scale: float = 0.1
-    geometry_target_center: tuple[float, float, float] = (0.0, 0.0, 1.3)
-
-    # Current-image DINO clusters; task/state conditioning is learned from BC.
-    visual_anchor_conditioning: bool = False
-    visual_anchor_num_tokens: int = 16
-    visual_anchor_hidden_dim: int = 256
-    visual_anchor_kmeans_iters: int = 4
-    visual_anchor_spatial_weight: float = 0.5
+    # LingBot query-mode depth alignment. The 24 VLM hidden states stay in h_vlm
+    # for the flow. The 256 x teacher_dim head is a smooth-L1 target only.
+    depth_query_conditioning: bool = False
+    depth_placeholder_token: str = "<DEPTH_PH>"
+    depth_num_views: int = 3
+    depth_num_task_tokens: int = 8
+    depth_num_backbone_tokens: int = 256
+    depth_teacher_dim: int = 1024
+    depth_loss_weight: float = 0.004
+    depth_feature_root: str = ""
+    depth_head_layers: int = 1
+    depth_head_heads: int = 4
+    depth_head_dim_head: int = 32
+    depth_head_ff_mult: int = 1
+    moge_path: str = ""
+    morgbd_path: str = ""
 
     @property
     def num_vlm_action_queries(self) -> int:
@@ -136,13 +143,16 @@ def _load_vlm_and_processor(
 ) -> Tuple[nn.Module, Any, Any, int]:
     processor_spec = build_latent_world_processor_spec(policy_cfg=cfg, vlm_model_id=vlm_model_id)
     vlm, processor = load_vlm_auto(processor_spec.model_id, processor_spec.cache_dir, dtype=cfg.vlm_dtype)
-    processor, tokenizer, placeholder_token_id = configure_latent_world_processor(
+    processor, tokenizer, placeholder_token_id, depth_token_id = configure_latent_world_processor(
         processor,
         placeholder_token=processor_spec.placeholder_token,
+        depth_placeholder_token=processor_spec.depth_placeholder_token,
     )
 
     # Ensure tokenizer size and embedding rows stay aligned after adding placeholder tokens.
     target_vocab_size = max(int(len(tokenizer)), int(placeholder_token_id + 1))
+    if depth_token_id is not None:
+        target_vocab_size = max(target_vocab_size, int(depth_token_id) + 1)
     embed = vlm.get_input_embeddings()
     if embed is None:
         raise RuntimeError("[LatentWorldPolicyBackend] VLM does not expose input embeddings.")
@@ -167,7 +177,7 @@ def _load_vlm_and_processor(
     if bool(getattr(cfg, "remove_lm_head", True)):
         remove_lm_head(vlm)
 
-    return vlm, processor, tokenizer, placeholder_token_id
+    return vlm, processor, tokenizer, placeholder_token_id, depth_token_id
 
 
 def _apply_flow_only_grad_to_h_vlm(
@@ -243,13 +253,17 @@ class LatentWorldPolicyBackend(nn.Module):
     def __init__(self, model_cfg: LatentWorldPolicyConfig, *, vlm_model_id: str) -> None:
         super().__init__()
         self.model_cfg = model_cfg
-        validate_geometry_config(model_cfg)
-        validate_visual_anchor_config(model_cfg)
         self.vlm_model_id = str(vlm_model_id)
         self.num_action_queries = int(self.model_cfg.num_vlm_action_queries)
 
         # 1) Load VLM + processor/tokenizer and register placeholder token.
-        self.vlm, self.processor, self.tokenizer, self.placeholder_token_id = _load_vlm_and_processor(
+        (
+            self.vlm,
+            self.processor,
+            self.tokenizer,
+            self.placeholder_token_id,
+            self.depth_placeholder_token_id,
+        ) = _load_vlm_and_processor(
             self.model_cfg,
             self.vlm_model_id,
         )
@@ -274,6 +288,46 @@ class LatentWorldPolicyBackend(nn.Module):
         )
         self.flow_action_num_queries = int(self.model_cfg.flow_action_num_queries)
         self.flow_action_query = nn.Parameter(torch.randn(self.flow_action_num_queries, vlm_hidden_dim) * 0.02)
+        self.depth_align_head: Optional[TaskTokenDepthHead] = None
+        if bool(self.model_cfg.depth_query_conditioning):
+            if self.depth_placeholder_token_id is None:
+                raise RuntimeError("Depth query conditioning requires the <DEPTH_PH> token.")
+            num_views = int(self.model_cfg.depth_num_views)
+            num_task = int(self.model_cfg.depth_num_task_tokens)
+            if num_views <= 0 or num_task <= 0:
+                raise ValueError("depth_num_views and depth_num_task_tokens must be positive.")
+            feature_root = str(self.model_cfg.depth_feature_root).strip()
+            if float(self.model_cfg.depth_loss_weight) > 0.0 and not feature_root:
+                raise ValueError(
+                    "depth_loss_weight > 0 requires framework.action_model.depth_feature_root. "
+                    "Precompute it with scripts/precompute_depth_targets.py in the lawam environment."
+                )
+            self.depth_align_head = TaskTokenDepthHead(
+                vlm_dim=vlm_hidden_dim,
+                teacher_dim=int(self.model_cfg.depth_teacher_dim),
+                num_backbone_tokens=int(self.model_cfg.depth_num_backbone_tokens),
+                num_task_tokens=num_task,
+                num_layers=int(self.model_cfg.depth_head_layers),
+                num_heads=int(self.model_cfg.depth_head_heads),
+                dim_head=int(self.model_cfg.depth_head_dim_head),
+                ff_mult=int(self.model_cfg.depth_head_ff_mult),
+            )
+            language_model = getattr(getattr(self.vlm, "model", None), "language_model", None)
+            if language_model is not None and getattr(language_model.config, "_attn_implementation", "sdpa") not in {
+                "sdpa",
+                "eager",
+            }:
+                language_model.config._attn_implementation = "sdpa"
+            print(
+                "[LatentWorldPolicyBackend] depth queries enabled: "
+                f"{num_views} views x {num_task} tokens, "
+                f"backbone={int(self.model_cfg.depth_num_backbone_tokens)}, "
+                f"depth_loss_weight={float(self.model_cfg.depth_loss_weight)}, "
+                f"action_horizon={int(self.model_cfg.action_horizon)}, "
+                f"depth_feature_root={feature_root}. "
+                "Depth-query hidden states stay in h_vlm for the flow. "
+                "The depth head output is loss-only and is matched to precomputed teacher features."
+            )
         # Keep the pretrained parameter prefix in both modes for exact head initialization.
         self.vlm_to_lam = VLMToLAMQFormer(
             vlm_hidden_dim=vlm_hidden_dim,
@@ -340,32 +394,6 @@ class LatentWorldPolicyBackend(nn.Module):
                 f"!= LAM token count={lam_num_tokens}; auto-aligned."
             )
             self.model_cfg.flow_cfg.num_vision_tokens = lam_num_tokens
-
-        self.geometry_head = None
-        self.model_cfg.flow_cfg.geometry_conditioning = bool(self.model_cfg.geometry_conditioning and self.model_cfg.geometry_inject)
-        if self.model_cfg.geometry_conditioning:
-            self.geometry_head = FutureHandGeometry(
-                vision_dim=lam_vision_dim, state_dim=int(self.model_cfg.flow_cfg.state_dim),
-                hidden_dim=int(self.model_cfg.geometry_hidden_dim), token_dim=lam_vision_dim,
-                frame_indices=self.model_cfg.geometry_frame_indices,
-                center=self.model_cfg.geometry_target_center, scale=self.model_cfg.geometry_target_scale,
-                condition_actions=bool(self.model_cfg.geometry_inject),
-            )
-
-        self.visual_anchor_head = None
-        self.model_cfg.flow_cfg.anchor_conditioning = bool(self.model_cfg.visual_anchor_conditioning)
-        if self.model_cfg.visual_anchor_conditioning:
-            self.visual_anchor_head = SemanticVisualAnchors(
-                vision_dim=lam_vision_dim, vlm_dim=int(self.model_cfg.flow_cfg.vlm_dim),
-                state_dim=int(self.model_cfg.flow_cfg.state_dim), token_dim=lam_vision_dim,
-                grid_height=lam_grid_h, grid_width=lam_grid_w,
-                num_tokens=int(self.model_cfg.visual_anchor_num_tokens),
-                hidden_dim=int(self.model_cfg.visual_anchor_hidden_dim),
-                kmeans_iters=int(self.model_cfg.visual_anchor_kmeans_iters),
-                spatial_weight=float(self.model_cfg.visual_anchor_spatial_weight),
-            )
-            print(f"[LatentWorldPolicyBackend] Visual anchors enabled: {self.model_cfg.visual_anchor_num_tokens} "
-                  "current-frame 2D DINO regions; task/state conditioning; independent action cross-attention.")
 
         # 5) Flow head.
         self.flow = ConditionalFlowMatchingHead(config=self.model_cfg.flow_cfg)
@@ -437,6 +465,7 @@ class LatentWorldPolicyBackend(nn.Module):
         flow_placeholder_mask: torch.BoolTensor,
         act_query: Optional[torch.Tensor],
         flow_query: torch.Tensor,
+        depth_placeholder_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         embed = self.vlm.get_input_embeddings()
         if embed is None:
@@ -462,12 +491,55 @@ class LatentWorldPolicyBackend(nn.Module):
             num_queries=int(flow_query.shape[0]),
             name="flow_query",
         )
+        vlm_attention_mask: torch.Tensor = attention_mask
+        position_ids = None
+        if self.depth_align_head is not None:
+            if depth_placeholder_mask is None or image_grid_thw is None:
+                raise ValueError(
+                    "Depth queries require depth_placeholder_mask and image_grid_thw."
+                )
+            task_tokens = self.depth_align_head.pooled_task_tokens().to(
+                device=inputs_embeds.device, dtype=inputs_embeds.dtype
+            )
+            view_count = int(self.model_cfg.depth_num_views)
+            injected = task_tokens.repeat(view_count, 1)
+            self._inject_queries(
+                inputs_embeds=inputs_embeds,
+                placeholder_mask=depth_placeholder_mask,
+                queries=injected,
+                num_queries=int(injected.shape[0]),
+                name="depth_query",
+            )
+            depth_spans = depth_placeholder_spans(
+                depth_placeholder_mask.to(device=inputs_embeds.device),
+                tokens_per_view=int(self.model_cfg.depth_num_task_tokens),
+            )
+            views_per_sample = [len(spans) for spans in depth_spans]
+            image_spans = image_token_spans(
+                input_ids,
+                image_token_id=int(self.vlm.config.image_token_id),
+                image_grid_thw=image_grid_thw,
+                merge_size=int(self.vlm.config.vision_config.spatial_merge_size),
+                views_per_sample=views_per_sample,
+            )
+            vlm_attention_mask = build_depth_query_attention_mask(
+                attention_mask, image_spans, depth_spans
+            )
+            position_ids = self.vlm.model.compute_3d_position_ids(
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                image_grid_thw=image_grid_thw,
+                attention_mask=attention_mask,
+            )
+            if position_ids is None:
+                raise RuntimeError("Qwen3-VL did not return 3D position ids for the depth-query mask.")
 
         # HF transformers 4.57 Qwen3VL causal wrapper drops `hidden_states`
         # from the returned output; use the underlying multimodal model output.
         vlm_out = self.vlm.model(
             inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
+            attention_mask=vlm_attention_mask,
+            position_ids=position_ids,
             pixel_values=pixel_values,
             image_grid_thw=image_grid_thw,
         )
@@ -564,6 +636,40 @@ class LatentWorldPolicyBackend(nn.Module):
             latent_loss_type=self.model_cfg.latent_loss_type,
         )
 
+    def _compute_depth_loss(
+        self,
+        *,
+        h_vlm: torch.Tensor,
+        input_ids: torch.Tensor,
+        image_grid_thw: Optional[torch.Tensor],
+        depth_mask: torch.Tensor,
+        depth_targets: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.depth_align_head is None:
+            raise RuntimeError("Depth loss requested without a depth head.")
+        if image_grid_thw is None:
+            raise ValueError("Depth loss requires image_grid_thw.")
+        depth_spans = depth_placeholder_spans(
+            depth_mask,
+            tokens_per_view=int(self.model_cfg.depth_num_task_tokens),
+        )
+        image_spans = image_token_spans(
+            input_ids,
+            image_token_id=int(self.vlm.config.image_token_id),
+            image_grid_thw=image_grid_thw,
+            merge_size=int(self.vlm.config.vision_config.spatial_merge_size),
+            views_per_sample=[len(spans) for spans in depth_spans],
+        )
+        context, context_mask = gather_depth_contexts(h_vlm, image_spans, depth_spans)
+        prediction = self.depth_align_head(context, context_mask)
+        target = depth_targets.reshape(-1, prediction.shape[1], prediction.shape[2])
+        if tuple(prediction.shape) != tuple(target.shape):
+            raise ValueError(
+                "Depth prediction/target shape mismatch: "
+                f"pred={tuple(prediction.shape)}, target={tuple(target.shape)}."
+            )
+        return F.smooth_l1_loss(prediction.float(), target.float().detach())
+
     def _decode_future_tokens_strict_single_query(
         self,
         *,
@@ -605,8 +711,7 @@ class LatentWorldPolicyBackend(nn.Module):
             self.flow,
             self.vlm_to_lam,
             self.fingertip_head,
-            self.geometry_head,
-            self.visual_anchor_head,
+            self.depth_align_head,
             mode=mode,
         )
 
@@ -705,27 +810,6 @@ class LatentWorldPolicyBackend(nn.Module):
 
     def _prepare_infer_batch(self, *, batch: LatentWorldPolicyInferBatch) -> LatentWorldPolicyInferBatch:
         return batch
-
-    def _predict_visual_anchors(self, shared, prepared_batch):
-        if self.visual_anchor_head is None:
-            return None, {}
-        with _cuda_autocast(torch.float32):
-            return self.visual_anchor_head(
-                current_features=shared.h_t_original, semantic_features=shared.h_vlm,
-                semantic_mask=prepared_batch["attention_mask"] == 1,
-                state=prepared_batch["state"], state_mask=prepared_batch["state_mask"],
-            )
-
-    def _predict_geometry(self, shared, prepared_batch):
-        if self.geometry_head is None:
-            return None, None
-        # Deliberately keep BC gradients through this path even when the original
-        # future-DINO flow condition uses detach_future_feature=true.
-        with _cuda_autocast(torch.float32):
-            return self.geometry_head(
-                shared.h_t1_pred, prepared_batch["state"],
-                prepared_batch["state_mask"], prepared_batch["action_hz"],
-            )
 
     def _compute_fingertip_loss(
         self,
@@ -859,6 +943,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 flow_placeholder_mask=prepared_batch["flow_placeholder_mask"],
                 act_query=act_query,
                 flow_query=flow_query,
+                depth_placeholder_mask=prepared_batch.get("depth_placeholder_mask"),
             )
         h_vlm = vlm_out_dict["h_vlm"]
         pred_action_emb = vlm_out_dict["pred_latent"]
@@ -979,16 +1064,20 @@ class LatentWorldPolicyBackend(nn.Module):
             fingertip_rmse = torch.zeros((), device=device, dtype=torch.float32)
         fingertip_rmse_mm = fingertip_rmse * 1000.0
 
-        geometry_positions, geometry_tokens = self._predict_geometry(shared, prepared_batch)
-        anchor_tokens, _ = self._predict_visual_anchors(shared, prepared_batch)
-        loss_geometry = torch.zeros((), device=device, dtype=torch.float32)
-        geometry_rmse_mm = loss_geometry
-        geometry_valid_fraction = loss_geometry
-        if self.geometry_head is not None:
-            if "geometry_targets" not in prepared_batch or "geometry_valid" not in prepared_batch:
-                raise KeyError("Geometry conditioning requires geometry_targets/geometry_valid from fingertip sidecars.")
-            loss_geometry, geometry_rmse_mm, geometry_valid_fraction = self.geometry_head.supervised_loss(
-                geometry_positions, prepared_batch["geometry_targets"], prepared_batch["geometry_valid"],
+        loss_depth = torch.zeros((), device=device, dtype=torch.float32)
+        if self.depth_align_head is not None and float(self.model_cfg.depth_loss_weight) > 0.0:
+            depth_targets = prepared_batch.get("depth_targets")
+            depth_mask = prepared_batch.get("depth_placeholder_mask")
+            if depth_targets is None or depth_mask is None:
+                raise KeyError(
+                    "Depth loss is enabled but the batch has no depth_targets/depth_placeholder_mask."
+                )
+            loss_depth = self._compute_depth_loss(
+                h_vlm=shared.h_vlm,
+                input_ids=prepared_batch["input_ids"],
+                image_grid_thw=prepared_batch["image_grid_thw"],
+                depth_mask=depth_mask,
+                depth_targets=depth_targets,
             )
 
         h_vlm_for_flow = _apply_flow_only_grad_to_h_vlm(
@@ -1022,6 +1111,8 @@ class LatentWorldPolicyBackend(nn.Module):
             action_hz_rep = prepared_batch["action_hz"].repeat(repeat_steps)
             embodiment_rep = prepared_batch["embodiment_id"].repeat(repeat_steps)
             attn_rep = attn_flow.repeat(repeat_steps, *([1] * (attn_flow.ndim - 1)))
+            contact = prepared_batch.get("contact_geometry")
+            contact_rep = None if contact is None else contact.repeat(repeat_steps, 1, 1)
 
             loss_flow = self.flow(
                 h_t=h_t_rep,
@@ -1034,8 +1125,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 state_mask=state_mask_rep,
                 actions_mask=actions_mask_rep,
                 attention_mask=attn_rep,
-                **({"geometry_tokens": geometry_tokens.repeat(repeat_steps, 1, 1)} if geometry_tokens is not None else {}),
-                **({"anchor_tokens": anchor_tokens.repeat(repeat_steps, 1, 1)} if anchor_tokens is not None else {}),
+                contact_geometry=contact_rep,
             )
 
             loss_total = (
@@ -1043,7 +1133,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 + self.model_cfg.perceptual_weight * loss_perceptual
                 + self.model_cfg.lam_encoder_distill_weight * loss_distill
                 + self.model_cfg.fingertip_loss_weight * loss_fingertip
-                + self.model_cfg.geometry_loss_weight * loss_geometry
+                + self.model_cfg.depth_loss_weight * loss_depth
             )
 
         zero = torch.tensor(0.0, device=device, dtype=loss_total.dtype)
@@ -1055,9 +1145,7 @@ class LatentWorldPolicyBackend(nn.Module):
             "loss_fingertip": loss_fingertip,
             "fingertip_rmse": fingertip_rmse,
             "fingertip_rmse_mm": fingertip_rmse_mm,
-            "loss_geometry": loss_geometry,
-            "geometry_rmse_mm": geometry_rmse_mm,
-            "geometry_valid_fraction": geometry_valid_fraction,
+            "loss_depth": loss_depth,
             "loss_total": loss_total,
         }
 
@@ -1089,9 +1177,6 @@ class LatentWorldPolicyBackend(nn.Module):
         )
         attn_flow = prepared_batch["attention_mask"] == 1
 
-        geometry_positions, geometry_tokens = self._predict_geometry(shared, prepared_batch)
-        anchor_tokens, anchor_info = self._predict_visual_anchors(shared, prepared_batch)
-
         with _cuda_autocast(flow_stage_dtype):
             if str(self.model_cfg.flow_future_feature).lower() == "current":
                 h_t1_for_flow = shared.h_t
@@ -1109,8 +1194,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 num_inference_steps=num_inference_steps,
                 attention_mask=attn_flow,
                 return_padded=bool(return_padded),
-                **({"geometry_tokens": geometry_tokens} if geometry_tokens is not None else {}),
-                **({"anchor_tokens": anchor_tokens} if anchor_tokens is not None else {}),
+                contact_geometry=prepared_batch.get("contact_geometry"),
             )
 
         if not return_intermediates:
@@ -1125,8 +1209,4 @@ class LatentWorldPolicyBackend(nn.Module):
             "h_t1_pred": shared.h_t1_pred.detach().cpu(),
             "vision_tokens_hw": (hw, hw),
         }
-        if geometry_positions is not None:
-            intermediates["geometry_positions_m"] = self.geometry_head.positions_in_meters(geometry_positions).cpu()
-            intermediates["geometry_frame_indices"] = tuple(self.model_cfg.geometry_frame_indices)
-        intermediates.update({key: value.detach().cpu() for key, value in anchor_info.items()})
         return actions, intermediates

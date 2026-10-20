@@ -5,8 +5,6 @@ from typing import Any
 
 from starVLA.model.framework.vlas.flowmatching_expert import ConditionalFlowMatchingConfig
 from starVLA.model.framework.vlas.lawam import LatentWorldPolicyConfig
-from starVLA.model.framework.vlas.future_hand_geometry import validate_geometry_config
-from starVLA.model.framework.vlas.semantic_visual_anchors import validate_visual_anchor_config
 
 
 class LatentWorldPolicyConfigBuilder:
@@ -129,6 +127,4 @@ class LatentWorldPolicyConfigBuilder:
 
         # Validate head selection before any model or dataloader is constructed.
         _ = policy_cfg.num_vlm_action_queries
-        validate_geometry_config(policy_cfg)
-        validate_visual_anchor_config(policy_cfg)
         return policy_cfg

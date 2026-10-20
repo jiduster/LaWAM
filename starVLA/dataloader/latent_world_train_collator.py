@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 import torch
+from starVLA.contact_geometry import ContactStore
 
 from starVLA.model.framework.latent_world.batch_utils import (
     align_feature_dim_with_mask,
@@ -17,6 +18,7 @@ from starVLA.model.framework.latent_world.processor_utils import (
     load_latent_world_processor,
 )
 from starVLA.model.framework.latent_world.types import LatentWorldPolicyTrainBatch, LatentWorldPolicyTrainRawSample
+from starVLA.model.framework.vlas.depth_queries import DepthTargetStore
 from starVLA.model.framework.latent_world.vlm_adapter import build_qwenvl_messages
 from starVLA.model.framework.latent_world.vlm_adapter import (
     DEFAULT_LATENT_WORLD_POLICY_COT_PROMPT,
@@ -55,8 +57,19 @@ class LatentWorldTrainCollator:
             else DEFAULT_LATENT_WORLD_POLICY_COT_PROMPT
         )
         self.training = True
+        self.contact_store = None
+        if bool(getattr(policy_cfg.flow_cfg, "contact_conditioning", False)):
+            self.contact_store = ContactStore(policy_cfg.contact_sidecar_root)
+        self.depth_enabled = bool(getattr(policy_cfg, "depth_query_conditioning", False))
+        self.depth_queries_per_view = int(getattr(policy_cfg, "depth_num_task_tokens", 8)) if self.depth_enabled else 0
+        self.depth_num_views = int(getattr(policy_cfg, "depth_num_views", 3))
+        self.depth_placeholder_token = str(getattr(policy_cfg, "depth_placeholder_token", "<DEPTH_PH>"))
+        self.depth_store = None
+        if self.depth_enabled:
+            self.depth_store = DepthTargetStore(getattr(policy_cfg, "depth_feature_root", ""))
         self._processor: Any | None = None
         self._placeholder_token_id: int | None = None
+        self._depth_placeholder_token_id: int | None = None
 
     def train(self) -> "LatentWorldTrainCollator":
         self.training = True
@@ -66,14 +79,17 @@ class LatentWorldTrainCollator:
         self.training = False
         return self
 
-    def _ensure_processor(self) -> tuple[Any, int]:
+    def _ensure_processor(self) -> tuple[Any, int, int | None]:
         if self._processor is None:
-            processor, _, placeholder_token_id = load_latent_world_processor(self.processor_spec)
+            processor, _, placeholder_token_id, depth_token_id = load_latent_world_processor(self.processor_spec)
             self._processor = processor
             self._placeholder_token_id = placeholder_token_id
+            self._depth_placeholder_token_id = depth_token_id
         assert self._processor is not None
         assert self._placeholder_token_id is not None
-        return self._processor, self._placeholder_token_id
+        if self.depth_enabled and self._depth_placeholder_token_id is None:
+            raise RuntimeError("Depth query conditioning is enabled but the depth placeholder token was not registered.")
+        return self._processor, self._placeholder_token_id, self._depth_placeholder_token_id
 
     @staticmethod
     def _to_wrist_view_list(wrist_images: torch.Tensor) -> list[torch.Tensor]:
@@ -123,11 +139,13 @@ class LatentWorldTrainCollator:
         if len(features) == 0:
             raise ValueError("LatentWorldTrainCollator received an empty feature list.")
 
-        processor, placeholder_token_id = self._ensure_processor()
+        processor, placeholder_token_id, depth_token_id = self._ensure_processor()
 
         image_views_batch: list[list[Any]] = []
         wrist_image_views_batch: list[list[Any]] = []
         primary_video_uint8_seqs: list[torch.Tensor] = []
+        depth_target_seqs: list[torch.Tensor] = []
+        contact_frames: list[torch.Tensor] = []
         instructions: list[str] = []
         actions_list: list[torch.Tensor] = []
         states_list: list[torch.Tensor] = []
@@ -136,9 +154,6 @@ class LatentWorldTrainCollator:
         fingertip_targets_list: list[torch.Tensor] = []
         fingertip_valid_list: list[torch.Tensor] = []
         fingertip_enabled = float(getattr(self.policy_cfg, "fingertip_loss_weight", 0.0)) > 0.0
-        geometry_enabled = bool(getattr(self.policy_cfg, "geometry_conditioning", False))
-        geometry_targets_list: list[torch.Tensor] = []
-        geometry_valid_list: list[torch.Tensor] = []
         window_size = int(self.policy_cfg.action_horizon)
 
         for sample in features:
@@ -151,12 +166,17 @@ class LatentWorldTrainCollator:
             instruction = str(sample["lang"])
             embodiment_id = int(sample["embodiment_id"])
             action_hz = float(sample["action_hz"])
+            if self.contact_store is not None:
+                contact_frames.append(torch.from_numpy(self.contact_store.frame(
+                    sample["dataset_name"], int(sample["episode_index"]),
+                    int(sample["frame_index"]), action_hz,
+                )))
 
             fingertip_positions = sample.get("fingertip_positions")
             fingertip_valid = sample.get("fingertip_valid")
-            if (fingertip_enabled or geometry_enabled) and (fingertip_positions is None or fingertip_valid is None):
+            if fingertip_enabled and (fingertip_positions is None or fingertip_valid is None):
                 raise KeyError(
-                    "Fingertip/geometry supervision is enabled but a dataset sample has no fingertip sidecar data. "
+                    "Fingertip supervision is enabled but a dataset sample has no fingertip sidecar data. "
                     "Set datasets.vla_data.fingertip_sidecar_root and generate all episode sidecars."
                 )
             if fingertip_positions is not None or fingertip_valid is not None:
@@ -179,12 +199,6 @@ class LatentWorldTrainCollator:
                         "Fingertip horizon does not match action_horizon: "
                         f"tips={int(fingertip_positions.shape[0])}, action_horizon={window_size}."
                     )
-                if geometry_enabled:
-                    if fingertip_positions.shape[1] != 8:
-                        raise ValueError("Geometry conditioning expects eight tips: left then right, ff/mf/rf/th.")
-                    indices = list(self.policy_cfg.geometry_frame_indices)
-                    geometry_targets_list.append(fingertip_positions[indices])
-                    geometry_valid_list.append(fingertip_valid[indices] & torch.isfinite(fingertip_positions[indices]).all(-1))
                 target_mode = str(getattr(self.policy_cfg, "fingertip_target_mode", "delta")).lower()
                 if target_mode == "endpoint":
                     # Last action-chunk frame, aligned with the future DINO token.
@@ -218,8 +232,25 @@ class LatentWorldTrainCollator:
                 processed_primary_videos = augmented_primary_videos[:-1].contiguous()
                 processed_wm_primary_video = augmented_primary_videos[-1].contiguous()
 
-            image_views_batch.append(self._to_primary_view_list(processed_primary_videos))
-            wrist_image_views_batch.append(self._to_wrist_view_list(processed_wrist_images))
+            primary_views = self._to_primary_view_list(processed_primary_videos)
+            wrist_views = self._to_wrist_view_list(processed_wrist_images)
+            image_views_batch.append(primary_views)
+            wrist_image_views_batch.append(wrist_views)
+            if self.depth_enabled:
+                view_count = len(primary_views) + len(wrist_views)
+                if view_count != self.depth_num_views:
+                    raise ValueError(
+                        "Depth queries expect "
+                        f"{self.depth_num_views} camera views, got {view_count} "
+                        f"({len(primary_views)} primary, {len(wrist_views)} wrist)."
+                    )
+                if "episode_index" not in sample or "frame_index" not in sample:
+                    raise KeyError("Depth targets require episode_index and frame_index on each training sample.")
+                if self.depth_store is None:
+                    raise RuntimeError("Depth target store was not initialized.")
+                depth_target_seqs.append(
+                    self.depth_store.frame(int(sample["episode_index"]), int(sample["frame_index"]))
+                )
             primary_video_uint8_seqs.append(processed_wm_primary_video.contiguous())
             instructions.append(instruction)
             actions_list.append(action_tensor)
@@ -236,6 +267,8 @@ class LatentWorldTrainCollator:
             flow_queries=self.flow_queries,
             cot_prompt_before_wrist=self.cot_prompt_before_wrist,
             cot_prompt_after_wrist=self.cot_prompt_after_wrist,
+            depth_queries_per_view=self.depth_queries_per_view,
+            depth_placeholder_token=self.depth_placeholder_token,
         )
         qwen_inputs = processor.apply_chat_template(
             qwen_messages,
@@ -297,7 +330,11 @@ class LatentWorldTrainCollator:
         if fingertip_enabled:
             batch["fingertip_targets"] = torch.stack(fingertip_targets_list, dim=0)
             batch["fingertip_valid"] = torch.stack(fingertip_valid_list, dim=0)
-        if geometry_enabled:
-            batch["geometry_targets"] = torch.stack(geometry_targets_list, dim=0)
-            batch["geometry_valid"] = torch.stack(geometry_valid_list, dim=0)
+        if self.contact_store is not None:
+            batch["contact_geometry"] = torch.stack(contact_frames)
+        if self.depth_enabled:
+            if depth_token_id is None:
+                raise RuntimeError("Depth placeholder token id is missing.")
+            batch["depth_placeholder_mask"] = input_ids == int(depth_token_id)
+            batch["depth_targets"] = torch.stack(depth_target_seqs, dim=0).contiguous()
         return batch

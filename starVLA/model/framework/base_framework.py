@@ -69,6 +69,19 @@ def validate_full_checkpoint_state_dict(
     return prefix_counts
 
 
+def validate_contact_checkpoint_keys(model_keys: set[str], checkpoint_keys: set[str]) -> None:
+    """Inference must never silently discard or randomly initialize contact layers."""
+    prefixes = ("policy_backend.flow.contact_encoder.", "policy_backend.flow.DiT.contact_attention.")
+    expected = {key for key in model_keys if key.startswith(prefixes)}
+    actual = {key for key in checkpoint_keys if key.startswith(prefixes)}
+    if expected != actual:
+        raise RuntimeError(
+            "Contact checkpoint/config mismatch: "
+            f"missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)}. "
+            "Use the config saved with this checkpoint. Baseline-to-contact initialization is training-only."
+        )
+
+
 def log_full_checkpoint_summary(
     *,
     framework_name: str,
@@ -191,6 +204,7 @@ class baseframework(PreTrainedModel):
         current_state_dict = FrameworkModel.state_dict()
         model_keys = set(current_state_dict.keys())
         checkpoint_keys = set(model_state_dict.keys())
+        validate_contact_checkpoint_keys(model_keys, checkpoint_keys)
         framework_name = str(getattr(model_config.framework, "name", "")).lower()
         policy_cfg = getattr(FrameworkModel, "policy_cfg", None)
         require_vlm_action_queries = int(getattr(policy_cfg, "num_vlm_action_queries", 1)) > 0

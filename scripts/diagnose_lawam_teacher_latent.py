@@ -198,7 +198,7 @@ def main():
         windows_per_episode=args.windows_per_episode,
     )
     collator = _build_latent_world_collator(
-        cfg, policy_cfg=replace(policy_cfg, fingertip_loss_weight=0.0, geometry_conditioning=False, geometry_loss_weight=0.0), training=False,
+        cfg, policy_cfg=replace(policy_cfg, fingertip_loss_weight=0.0), training=False,
     )
     loader = DataLoader(
         windows, batch_size=args.batch_size, num_workers=args.num_workers,

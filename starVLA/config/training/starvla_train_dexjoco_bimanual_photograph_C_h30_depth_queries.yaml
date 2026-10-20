@@ -1,9 +1,9 @@
-run_id: C_h30_visual_anchors_continue_10k
-run_root_dir: results/Checkpoints/dexjoco_bimanual_photograph_C_h30_visual_anchors
+run_id: dexjoco_bimanual_photograph_C_h30_depth_queries_sft
+run_root_dir: results/Checkpoints/dexjoco_bimanual_photograph_C_h30_depth_queries
 seed: 2026
-trackers: []
+trackers: [wandb]
 wandb_entity: null
-wandb_project: finetune-DexJoCo-VisualAnchors
+wandb_project: finetune-DexJoCo-BimanualPhotograph-H30-DepthQueries
 is_debug: false
 framework:
   name: LaWAM
@@ -29,14 +29,20 @@ framework:
     lam_encoder_distill_weight: 0.1
     repeated_diffusion_steps: 2
     fingertip_loss_weight: 0.0
-    geometry_conditioning: false
-    geometry_inject: false
-    geometry_loss_weight: 0.0
-    visual_anchor_conditioning: true
-    visual_anchor_num_tokens: 16
-    visual_anchor_hidden_dim: 256
-    visual_anchor_kmeans_iters: 4
-    visual_anchor_spatial_weight: 0.5
+    depth_query_conditioning: true
+    depth_placeholder_token: <DEPTH_PH>
+    depth_num_views: 3
+    depth_num_task_tokens: 8
+    depth_num_backbone_tokens: 256
+    depth_teacher_dim: 1024
+    depth_loss_weight: 0.004
+    depth_feature_root: /mnt/ceph3/zyh/LaWAM_depth_targets/dexjoco_bimanual_photograph
+    depth_head_layers: 1
+    depth_head_heads: 4
+    depth_head_dim_head: 32
+    depth_head_ff_mult: 1
+    moge_path: /mnt/ceph/ckpt/MoGe2/MoGe_2_vit_b_normal.pt
+    morgbd_path: /mnt/ceph/ckpt/lingbot-depth-pretrain-vitl-14/model.pt
     flow_cfg:
       action_dim: 44
       state_dim: 46
@@ -49,7 +55,6 @@ framework:
       interleave_self_attention: true
       use_alternate_vldit: true
       attend_text_every_n_blocks: 2
-      anchor_attention_every_n_blocks: 4
       cfg_drop_prob: 0.0
       cfg_guidance_scale: 1.0
       num_inference_steps: 10
@@ -85,21 +90,23 @@ trainer:
   eval_interval: 1000
   eval_batches: 5
   learning_rate:
-    base: 1.0e-05
-    visual_anchors:
-      lr: 1.0e-04
-      modules:
-      - policy_backend.visual_anchor_head
-      - policy_backend.flow.DiT.anchor_blocks
+    base: 5.0e-05
     action_model:
-      lr: 1.0e-05
-      modules: [policy_backend.flow]
+      lr: 1.0e-4
+      modules:
+      - policy_backend.depth_align_head
+    existing_flow:
+      lr: 1.0e-5
+      modules:
+      - policy_backend.flow
     world_model:
-      lr: 1.0e-05
-      modules: [policy_backend.lam.decoder]
+      lr: 1.0e-5
+      modules:
+      - policy_backend.lam.decoder
     vlm:
-      lr: 2.0e-06
-      modules: [policy_backend.vlm]
+      lr: 2.0e-6
+      modules:
+      - policy_backend.vlm
   lr_scheduler_type: cosine_with_min_lr
   scheduler_specific_kwargs:
     min_lr: 5.0e-07

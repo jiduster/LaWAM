@@ -26,6 +26,7 @@ class LatentWorldPolicyInferBatchBuilder:
         "state",
         "state_mask",
         "wrist_image",
+        "contact_geometry",
     }
     _REQUIRED_INFER_KEYS = {"lang", "primary_image", "action_hz", "embodiment_id"}
 
@@ -174,6 +175,10 @@ class LatentWorldPolicyInferBatchBuilder:
             flow_queries=int(self.policy_backend.flow_action_query.shape[0]),
             placeholder_id=int(self.policy_backend.placeholder_token_id),
         )
+        depth_token_id = getattr(self.policy_backend, "depth_placeholder_token_id", None)
+        depth_mask = None
+        if depth_token_id is not None:
+            depth_mask = input_ids == int(depth_token_id)
 
         primary_image_batch = torch.stack(primary_image_tensors, dim=0)
         imagenet_normalize_image_batch_(primary_image_batch)
@@ -191,6 +196,14 @@ class LatentWorldPolicyInferBatchBuilder:
             "action_hz": torch.tensor(action_hz_list, dtype=torch.float32),
             "image_grid_thw": qwen_inputs.get("image_grid_thw"),
         }
+        if depth_mask is not None:
+            batch["depth_placeholder_mask"] = depth_mask
+        if bool(getattr(self.policy_cfg.flow_cfg, "contact_conditioning", False)):
+            if any("contact_geometry" not in ex for ex in examples):
+                raise KeyError("Oracle contact policy needs current simulator contact_geometry in every observation")
+            batch["contact_geometry"] = torch.stack([
+                torch.as_tensor(ex["contact_geometry"], dtype=torch.float32) for ex in examples
+            ])
         if not torch.is_tensor(batch["image_grid_thw"]):
             batch["image_grid_thw"] = None
         return self._move_batch_to_device(batch, self._target_device())

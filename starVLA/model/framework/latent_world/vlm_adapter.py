@@ -60,6 +60,11 @@ def build_prompt_segments(
     return text_before_wrist, text_after_wrist
 
 
+def _depth_placeholder_text(token: str, count: int) -> str:
+    # No spaces: Qwen tokenizes the separator as its own token and splits the group.
+    return str(token) * int(count)
+
+
 def build_qwenvl_messages(
     *,
     images: Sequence[Sequence[Any]],
@@ -70,6 +75,8 @@ def build_qwenvl_messages(
     flow_queries: int,
     cot_prompt_before_wrist: str = DEFAULT_LATENT_WORLD_TEMPORAL_COT_PROMPT,
     cot_prompt_after_wrist: str = DEFAULT_LATENT_WORLD_POLICY_COT_PROMPT,
+    depth_queries_per_view: int = 0,
+    depth_placeholder_token: str = "<DEPTH_PH>",
 ) -> list[list[dict[str, Any]]]:
     if len(images) != len(instructions):
         raise ValueError("Images and instructions must have the same length.")
@@ -78,7 +85,17 @@ def build_qwenvl_messages(
 
     messages = []
     for imgs, wrist_imgs, instruction in zip(images, wrist_images, instructions):
-        content = [{"type": "image", "image": img} for img in imgs]
+        content: list[dict[str, Any]] = []
+        depth_count = int(depth_queries_per_view)
+        for img in imgs:
+            content.append({"type": "image", "image": img})
+            if depth_count > 0:
+                content.append(
+                    {
+                        "type": "text",
+                        "text": _depth_placeholder_text(depth_placeholder_token, depth_count),
+                    }
+                )
         text_before_wrist, text_after_wrist = build_prompt_segments(
             instruction=instruction,
             placeholder_token=placeholder_token,
@@ -90,7 +107,15 @@ def build_qwenvl_messages(
         if text_before_wrist:
             content.append({"type": "text", "text": text_before_wrist})
         if wrist_imgs:
-            content.extend({"type": "image", "image": img} for img in wrist_imgs)
+            for img in wrist_imgs:
+                content.append({"type": "image", "image": img})
+                if depth_count > 0:
+                    content.append(
+                        {
+                            "type": "text",
+                            "text": _depth_placeholder_text(depth_placeholder_token, depth_count),
+                        }
+                    )
         if text_after_wrist:
             content.append({"type": "text", "text": text_after_wrist})
         messages.append([{"role": "user", "content": content}])
@@ -109,6 +134,8 @@ class LatentWorldPolicyVLMAdapter(nn.Module):
         placeholder_token: str,
         act_queries: int,
         flow_queries: int,
+        depth_queries_per_view: int = 0,
+        depth_placeholder_token: str = "<DEPTH_PH>",
     ) -> None:
         super().__init__()
         self.model = model
@@ -117,6 +144,8 @@ class LatentWorldPolicyVLMAdapter(nn.Module):
         self.placeholder_token = str(placeholder_token)
         self.act_queries = int(act_queries)
         self.flow_queries = int(flow_queries)
+        self.depth_queries_per_view = int(depth_queries_per_view)
+        self.depth_placeholder_token = str(depth_placeholder_token)
 
     def build_qwenvl_inputs(
         self,
@@ -135,6 +164,8 @@ class LatentWorldPolicyVLMAdapter(nn.Module):
             flow_queries=self.flow_queries,
             cot_prompt_before_wrist=cot_prompt_before_wrist,
             cot_prompt_after_wrist=cot_prompt_after_wrist,
+            depth_queries_per_view=self.depth_queries_per_view,
+            depth_placeholder_token=self.depth_placeholder_token,
         )
         return self.processor.apply_chat_template(
             messages,

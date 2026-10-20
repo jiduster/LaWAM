@@ -72,9 +72,7 @@ TRAIN_COMPONENT_METRIC_ALIASES = {
     "train_loss_fingertip": ("loss_fingertip",),
     "train_fingertip_rmse": ("fingertip_rmse",),
     "train_fingertip_rmse_mm": ("fingertip_rmse_mm",),
-    "train_loss_geometry": ("loss_geometry",),
-    "train_geometry_rmse_mm": ("geometry_rmse_mm",),
-    "train_geometry_valid_fraction": ("geometry_valid_fraction",),
+    "train_loss_depth": ("loss_depth",),
 }
 
 def _accumulate_eval_scalar(metric_numerator: torch.Tensor, metric_denominator: torch.Tensor, value) -> None:
@@ -103,6 +101,25 @@ def _coerce_config_bool(value, *, default: bool, field_name: str) -> bool:
         if normalized in {"0", "false", "no", "n", "off"}:
             return False
     raise ValueError(f"Invalid boolean value for `{field_name}`: {value!r}")
+
+
+def _advance_scheduler_to_completed_steps(scheduler, completed_steps: int) -> None:
+    """Move a freshly built scheduler to the learning rate of a finished step.
+
+    Checkpoints store model weights only. Construction already applies step 0,
+    and each finished training step calls ``scheduler.step()`` once, so step
+    ``N`` leaves ``last_epoch == N``.
+    """
+    completed_steps = int(completed_steps)
+    if completed_steps <= 0:
+        return
+    scheduler.last_epoch = completed_steps
+    scheduler._step_count = completed_steps + 1
+    scheduler._get_lr_called_within_step = True
+    learning_rates = scheduler.get_lr()
+    for group, learning_rate in zip(scheduler.optimizer.param_groups, learning_rates):
+        group["lr"] = learning_rate
+    scheduler._last_lr = [group["lr"] for group in scheduler.optimizer.param_groups]
 
 
 def build_accelerator(cfg) -> Accelerator:
@@ -316,6 +333,23 @@ class VLATrainer(TrainerUtils):
             field_name="trainer.load_pretrained_policy_lam",
         )
 
+        resume_step = int(getattr(self.config.trainer, "resume_step", 0) or 0)
+        if resume_step < 0:
+            raise ValueError(f"trainer.resume_step must be >= 0, got {resume_step}.")
+        max_steps = int(self.config.trainer.max_train_steps)
+        if resume_step >= max_steps:
+            raise ValueError(
+                f"trainer.resume_step={resume_step} is already at max_train_steps={max_steps}."
+            )
+        if resume_step > 0:
+            checkpoint_name = os.path.basename(str(pretrained_checkpoint or ""))
+            expected_name = f"steps_{resume_step}_pytorch_model.pt"
+            if checkpoint_name != expected_name:
+                raise ValueError(
+                    f"trainer.resume_step={resume_step} requires trainer.pretrained_checkpoint "
+                    f"to end with `{expected_name}`, got `{checkpoint_name or pretrained_checkpoint}`."
+                )
+
         if pretrained_checkpoint:
             self.model = self.load_finetune_init_weights(
                 self.model,
@@ -323,14 +357,25 @@ class VLATrainer(TrainerUtils):
                 load_pretrained_policy_flow=load_pretrained_policy_flow,
                 load_pretrained_policy_lam=load_pretrained_policy_lam,
             )
-            self.completed_steps = 0
-            logger.info(
-                "Initialized model weights for finetune from `%s`; load_pretrained_policy_flow=%s; "
-                "load_pretrained_policy_lam=%s; training starts from step 0.",
-                pretrained_checkpoint,
-                load_pretrained_policy_flow,
-                load_pretrained_policy_lam,
-            )
+            self.completed_steps = resume_step
+            if resume_step > 0:
+                _advance_scheduler_to_completed_steps(self.lr_scheduler, resume_step)
+                logger.info(
+                    "Resuming training from `%s` at step %d/%d. "
+                    "Model weights and the learning-rate schedule continue. "
+                    "Optimizer moments start again because checkpoints store weights only.",
+                    pretrained_checkpoint,
+                    resume_step,
+                    max_steps,
+                )
+            else:
+                logger.info(
+                    "Initialized model weights for finetune from `%s`; load_pretrained_policy_flow=%s; "
+                    "load_pretrained_policy_lam=%s; training starts from step 0.",
+                    pretrained_checkpoint,
+                    load_pretrained_policy_flow,
+                    load_pretrained_policy_lam,
+                )
         else:
             logger.info("No pretrained checkpoint provided. Starting training from scratch.")
             self.completed_steps = 0
@@ -436,7 +481,8 @@ class VLATrainer(TrainerUtils):
 
         # create progress bar
         progress_bar = tqdm(
-            range(self.config.trainer.max_train_steps),
+            initial=int(self.completed_steps),
+            total=int(self.config.trainer.max_train_steps),
             desc=str(getattr(self.config, "run_id", "train")),
             disable=not self.accelerator.is_local_main_process,
         )
@@ -542,10 +588,6 @@ class VLATrainer(TrainerUtils):
         val_loss_perceptual_denominator = torch.zeros((), dtype=torch.float64, device=self.accelerator.device)
         val_loss_distill_numerator = torch.zeros((), dtype=torch.float64, device=self.accelerator.device)
         val_loss_distill_denominator = torch.zeros((), dtype=torch.float64, device=self.accelerator.device)
-        geometry_metrics = {
-            key: [torch.zeros((), dtype=torch.float64, device=self.accelerator.device) for _ in range(2)]
-            for key in ("loss_geometry", "geometry_rmse_mm", "geometry_valid_fraction")
-        }
         val_iter = iter(self.vla_val_dataloader)
         policy_backend = getattr(eval_model, "policy_backend", None)
         if policy_backend is not None and hasattr(policy_backend, "set_flow_train_step"):
@@ -575,8 +617,6 @@ class VLATrainer(TrainerUtils):
                             val_loss_distill_denominator,
                             eval_output_dict.get("loss_distill"),
                         )
-                        for key, (numerator, denominator) in geometry_metrics.items():
-                            _accumulate_eval_scalar(numerator, denominator, eval_output_dict.get(key))
 
                     try:
                         pred_actions, gt_actions, action_mask = (
@@ -617,14 +657,8 @@ class VLATrainer(TrainerUtils):
             dist.all_reduce(val_loss_perceptual_denominator, op=dist.ReduceOp.SUM)
             dist.all_reduce(val_loss_distill_numerator, op=dist.ReduceOp.SUM)
             dist.all_reduce(val_loss_distill_denominator, op=dist.ReduceOp.SUM)
-            for values in geometry_metrics.values():
-                for value in values:
-                    dist.all_reduce(value, op=dist.ReduceOp.SUM)
 
         if self.accelerator.is_main_process:
-            for key, (numerator, denominator) in geometry_metrics.items():
-                if denominator.item() > 0:
-                    step_metrics[f"val_{key}"] = float((numerator / denominator).item())
             if float(metric_denominator.item()) > 0:
                 val_mse_score = float((metric_numerator / metric_denominator).item())
                 step_metrics["val_mse_score"] = val_mse_score
@@ -723,6 +757,15 @@ def main(cfg) -> None:
     #  Wrap config to enable access tracking
     cfg = wrap_config(cfg)
     logger.info("✅ Configuration wrapped for access tracking")
+    action_model_cfg = getattr(getattr(cfg, "framework", None), "action_model", None)
+    if bool(getattr(action_model_cfg, "depth_query_conditioning", False)):
+        sec_chunk = getattr(getattr(cfg, "datasets", None).vla_data, "sec_chunk", None)
+        action_horizon = getattr(action_model_cfg, "action_horizon", None)
+        logger.info(
+            "depth queries enabled; sec_chunk=%s; action_horizon=%s",
+            sec_chunk,
+            action_horizon,
+        )
 
     # create output directory and save config
     setup_directories(cfg=cfg)
