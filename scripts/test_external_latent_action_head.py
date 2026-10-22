@@ -108,9 +108,10 @@ class TinyLAM(nn.Module):
         return {"quantized": self.latent_encoder(delta).unsqueeze(1)}
 
 
-def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mode=None, contact=False):
+def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mode=None, contact=False, pose=False, action_only=False):
     cfg = LatentWorldPolicyConfig(
         latent_action_head_type=mode,
+        action_expert_only=action_only,
         future_action_window_size=3,
         action_horizon=4,
         future_prediction=True,
@@ -121,6 +122,10 @@ def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mod
         fingertip_loss_weight=0.05 if fingertip_mode else 0.0,
         fingertip_target_mode=fingertip_mode or "delta",
         flow_cfg=ConditionalFlowMatchingConfig(
+            pose_conditioning=pose,
+            pose_position_mean=(0.1, 0.2, 1.3),
+            pose_position_std=(0.05, 0.06, 0.1),
+            pose_attention_heads=4,
             contact_conditioning=contact,
             contact_every_n_blocks=2,
             action_dim=44,

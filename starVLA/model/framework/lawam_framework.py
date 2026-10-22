@@ -39,6 +39,8 @@ class LaWAMFramework(baseframework):
     def apply_training_freeze_policy(self, freeze_cfg) -> None:
         freeze_policy = parse_policy_freeze_config(freeze_cfg)
         apply_policy_freeze(self.policy_backend, freeze_policy)
+        if self.policy_cfg.action_expert_only:
+            self.policy_backend.configure_action_expert_only()
         self.policy_backend.sync_training_modes(mode=self.training)
 
     def forward(self, batch: LatentWorldPolicyTrainBatch, **kwargs) -> Dict[str, torch.Tensor]:

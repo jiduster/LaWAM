@@ -119,7 +119,7 @@ class LatentWorldPolicyRunner:
             "image_grid_thw": train_batch["image_grid_thw"],
         }
 
-        for key in ("contact_geometry", "depth_placeholder_mask"):
+        for key in ("object_pose_condition", "contact_geometry", "depth_placeholder_mask"):
             if key in train_batch:
                 infer_batch[key] = train_batch[key]
 

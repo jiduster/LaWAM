@@ -57,6 +57,10 @@ class LatentWorldTrainCollator:
             else DEFAULT_LATENT_WORLD_POLICY_COT_PROMPT
         )
         self.training = True
+        self.pose_store = None
+        if bool(getattr(policy_cfg.flow_cfg, "pose_conditioning", False)):
+            from starVLA.object_pose import ObjectPoseStore
+            self.pose_store = ObjectPoseStore(policy_cfg.object_pose_sidecar_root)
         self.contact_store = None
         if bool(getattr(policy_cfg.flow_cfg, "contact_conditioning", False)):
             self.contact_store = ContactStore(policy_cfg.contact_sidecar_root)
@@ -146,6 +150,8 @@ class LatentWorldTrainCollator:
         primary_video_uint8_seqs: list[torch.Tensor] = []
         depth_target_seqs: list[torch.Tensor] = []
         contact_frames: list[torch.Tensor] = []
+        pose_frames: list[torch.Tensor] = []
+        pose_enabled = bool(getattr(self.policy_cfg.flow_cfg, "pose_conditioning", False))
         instructions: list[str] = []
         actions_list: list[torch.Tensor] = []
         states_list: list[torch.Tensor] = []
@@ -153,7 +159,8 @@ class LatentWorldTrainCollator:
         action_hz_list: list[float] = []
         fingertip_targets_list: list[torch.Tensor] = []
         fingertip_valid_list: list[torch.Tensor] = []
-        fingertip_enabled = float(getattr(self.policy_cfg, "fingertip_loss_weight", 0.0)) > 0.0
+        fingertip_enabled = (float(getattr(self.policy_cfg, "fingertip_loss_weight", 0.0)) > 0.0
+                             and not bool(getattr(self.policy_cfg, "action_expert_only", False)))
         window_size = int(self.policy_cfg.action_horizon)
 
         for sample in features:
@@ -166,6 +173,17 @@ class LatentWorldTrainCollator:
             instruction = str(sample["lang"])
             embodiment_id = int(sample["embodiment_id"])
             action_hz = float(sample["action_hz"])
+            if pose_enabled:
+                from starVLA.model.framework.vlas.pose_conditioning import validate_pose_tensor
+                value = sample.get("object_pose_condition")
+                if value is None:
+                    value = self.pose_store.frame(sample["dataset_name"], int(sample["episode_index"]),
+                                                  int(sample["frame_index"]), action_hz)
+                value = torch.as_tensor(value, dtype=torch.float32)
+                if value.shape != (12,):
+                    raise ValueError("Training sample object_pose_condition must be [12]")
+                validate_pose_tensor(value.unsqueeze(0))
+                pose_frames.append(value)
             if self.contact_store is not None:
                 contact_frames.append(torch.from_numpy(self.contact_store.frame(
                     sample["dataset_name"], int(sample["episode_index"]),
@@ -330,6 +348,8 @@ class LatentWorldTrainCollator:
         if fingertip_enabled:
             batch["fingertip_targets"] = torch.stack(fingertip_targets_list, dim=0)
             batch["fingertip_valid"] = torch.stack(fingertip_valid_list, dim=0)
+        if pose_enabled:
+            batch["object_pose_condition"] = torch.stack(pose_frames)
         if self.contact_store is not None:
             batch["contact_geometry"] = torch.stack(contact_frames)
         if self.depth_enabled:

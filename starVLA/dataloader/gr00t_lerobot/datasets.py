@@ -591,6 +591,13 @@ class LeRobotSingleDataset(Dataset):
         self._load_hf_dataset()
 
         full_trajectory_ids, full_trajectory_lengths = self._get_trajectories()
+        allowed_pose_episodes = self.data_cfg.get("object_pose_episode_indices", None) if hasattr(self.data_cfg, "get") else None
+        if allowed_pose_episodes is not None:
+            allowed = set(int(x) for x in allowed_pose_episodes)
+            if not allowed or not allowed.issubset(set(full_trajectory_ids.tolist())):
+                raise ValueError("Invalid object_pose_episode_indices: empty or unknown episode IDs")
+            keep = np.array([int(x) in allowed for x in full_trajectory_ids], dtype=bool)
+            full_trajectory_ids, full_trajectory_lengths = full_trajectory_ids[keep], full_trajectory_lengths[keep]
         self._all_trajectory_ids = full_trajectory_ids
         self._all_trajectory_lengths = full_trajectory_lengths
         self._build_mode_split_from_trajectories()
@@ -1495,6 +1502,25 @@ class LeRobotSingleDataset(Dataset):
             for key in keys:
                 data[key] = get_data(trajectory_id, modality, key, base_index)
         return data
+
+    def get_object_pose_condition(self, trajectory_id: int, base_index: int):
+        if not (hasattr(self.data_cfg, "get") and self.data_cfg.get("load_object_pose", False)):
+            return None
+        from starVLA.object_pose import validate_object_pose
+        episode = self.episodes_hf[self._episode_index_to_row[int(trajectory_id)]]
+        if not 0 <= base_index < int(episode["length"]):
+            raise IndexError("Current object pose frame outside episode")
+        row = self.hf_dataset[int(episode["dataset_from_index"]) + int(base_index)]
+        if int(row["episode_index"]) != trajectory_id or int(row["frame_index"]) != base_index:
+            raise ValueError("Current object pose row/time alignment mismatch")
+        if "object_pose_condition" not in row:
+            raise KeyError("load_object_pose requires the dataset column object_pose_condition")
+        if "object_pose_valid" in row and not bool(row["object_pose_valid"]):
+            raise ValueError("Invalid reconstructed object pose; filter quarantined episodes before sampling")
+        pose = validate_object_pose(row["object_pose_condition"])
+        if pose.shape != (12,):
+            raise ValueError("Current object pose dataset row must be [12]")
+        return pose.copy()
 
     def get_fingertip_data(
         self,
@@ -2980,6 +3006,9 @@ class LeRobotMixtureDataset(Dataset):
             "frame_index": int(base_index),
             "dataset_name": dataset.dataset_name,
         }
+        object_pose = dataset.get_object_pose_condition(trajectory_id, base_index)
+        if object_pose is not None:
+            output["object_pose_condition"] = torch.from_numpy(object_pose)
         fingertip_data = dataset.get_fingertip_data(trajectory_id, base_index)
         if fingertip_data is not None:
             output["fingertip_positions"], output["fingertip_valid"] = fingertip_data

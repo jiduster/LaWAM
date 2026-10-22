@@ -27,6 +27,7 @@ from diffusers.models.embeddings import (
 )
 from torch import nn
 from .contact_conditioning import ContactCrossAttention
+from .pose_conditioning import PoseCrossAttention
 
 
 class TimestepEncoder(nn.Module):
@@ -244,6 +245,9 @@ class DiT(ModelMixin, ConfigMixin):
         positional_embeddings: Optional[str] = None,
         interleave_self_attention=False,
         cross_attention_dim: Optional[int] = None,
+        pose_conditioning: bool = False,
+        pose_every_n_blocks: int = 1,
+        pose_attention_heads: int = 8,
         contact_conditioning: bool = False,
         contact_every_n_blocks: int = 4,
     ):
@@ -302,6 +306,15 @@ class DiT(ModelMixin, ConfigMixin):
         self.norm_out = nn.LayerNorm(self.inner_dim, elementwise_affine=False, eps=1e-6)
         self.proj_out_1 = nn.Linear(self.inner_dim, 2 * self.inner_dim)
         self.proj_out_2 = nn.Linear(self.inner_dim, self.output_dim)
+        self.pose_attention = nn.ModuleDict()
+        if pose_conditioning:
+            if not 1 <= pose_every_n_blocks <= num_layers:
+                raise ValueError("pose_every_n_blocks must be between 1 and num_layers")
+            with torch.random.fork_rng(devices=[]):
+                self.pose_attention.update({
+                    str(i): PoseCrossAttention(self.inner_dim, pose_attention_heads)
+                    for i in range(pose_every_n_blocks - 1, num_layers, pose_every_n_blocks)
+                })
         # print(
         #     "Total number of DiT parameters: ",
         #     sum(p.numel() for p in self.parameters() if p.requires_grad),
@@ -317,7 +330,10 @@ class DiT(ModelMixin, ConfigMixin):
         return_all_hidden_states: bool = False,
         hidden_positional_embeddings: Optional[torch.Tensor] = None,
         contact_tokens: Optional[torch.Tensor] = None,
+        pose_tokens: Optional[torch.Tensor] = None,
     ):
+        if self.pose_attention and pose_tokens is None:
+            raise ValueError("Pose-conditioned DiT requires pose_tokens")
         if self.contact_attention and contact_tokens is None:
             raise ValueError("Contact-conditioned DiT requires contact_tokens")
         # Encode timesteps
@@ -352,6 +368,8 @@ class DiT(ModelMixin, ConfigMixin):
                 )
             if str(idx) in self.contact_attention:
                 hidden_states = self.contact_attention[str(idx)](hidden_states, contact_tokens, hidden_attention_mask)
+            if str(idx) in self.pose_attention:
+                hidden_states = self.pose_attention[str(idx)](hidden_states, pose_tokens, hidden_attention_mask)
             all_hidden_states.append(hidden_states)
 
         # Output processing
@@ -388,7 +406,10 @@ class AlternateVLDiT(DiT):
         vlm_mask: Optional[torch.Tensor] = None,    # [B, S], True=VLM tokens
         hidden_positional_embeddings: Optional[torch.Tensor] = None,
         contact_tokens: Optional[torch.Tensor] = None,
+        pose_tokens: Optional[torch.Tensor] = None,
     ):
+        if self.pose_attention and pose_tokens is None:
+            raise ValueError("Pose-conditioned DiT requires pose_tokens")
         if self.contact_attention and contact_tokens is None:
             raise ValueError("Contact-conditioned DiT requires contact_tokens")
         assert image_mask is not None and vlm_mask is not None, \
@@ -444,6 +465,8 @@ class AlternateVLDiT(DiT):
                 )
             if str(idx) in self.contact_attention:
                 hidden_states = self.contact_attention[str(idx)](hidden_states, contact_tokens, hidden_attention_mask)
+            if str(idx) in self.pose_attention:
+                hidden_states = self.pose_attention[str(idx)](hidden_states, pose_tokens, hidden_attention_mask)
             all_hidden_states.append(hidden_states)
         
         conditioning = temb

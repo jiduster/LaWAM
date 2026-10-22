@@ -94,6 +94,8 @@ class LatentWorldPolicyConfig:
     # predicted latent and regresses the 8-tip displacement across that same chunk.
     fingertip_loss_weight: float = 0.0
     contact_sidecar_root: str = ""
+    object_pose_sidecar_root: str = ""
+    action_expert_only: bool = False
     fingertip_num_points: int = 8
     fingertip_target_mode: str = "delta"
     fingertip_head_hidden_dim: int = 512
@@ -416,6 +418,8 @@ class LatentWorldPolicyBackend(nn.Module):
                 "[LatentWorldPolicyBackend][warn] enable_flow_h_t1_scheduled_sampling=true and "
                 "detach_future_feature=false: flow gradients through GT-conditioned branch can increase loss_perceptual."
             )
+        if self.model_cfg.action_expert_only:
+            self.configure_action_expert_only()
         self.sync_training_modes(mode=self.training)
 
     def _inject_queries(
@@ -698,6 +702,12 @@ class LatentWorldPolicyBackend(nn.Module):
     ) -> "LatentWorldPolicyBackend":
         model = cls(cfg, vlm_model_id=vlm_model_id)
         return model
+
+    def configure_action_expert_only(self):
+        for parameter in self.parameters():
+            parameter.requires_grad_(False)
+        for parameter in self.flow.parameters():
+            parameter.requires_grad_(True)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -1032,7 +1042,7 @@ class LatentWorldPolicyBackend(nn.Module):
 
         with _cuda_autocast(lam_stage_dtype):
             loss_distill = torch.tensor(0.0, device=device, dtype=lam_stage_dtype)
-            if bool(self.model_cfg.enable_loss_distill):
+            if bool(self.model_cfg.enable_loss_distill) and not self.model_cfg.action_expert_only:
                 loss_distill = self._compute_distill_loss(
                     pred_latent=shared.pred_action_emb,
                     primary_video=prepared_batch["primary_video"],
@@ -1044,7 +1054,7 @@ class LatentWorldPolicyBackend(nn.Module):
             else:
                 loss_perceptual = torch.tensor(0.0, device=device, dtype=lam_stage_dtype)
 
-        if float(self.model_cfg.fingertip_loss_weight) > 0.0:
+        if float(self.model_cfg.fingertip_loss_weight) > 0.0 and not self.model_cfg.action_expert_only:
             fingertip_targets = prepared_batch.get("fingertip_targets")
             fingertip_valid = prepared_batch.get("fingertip_valid")
             if fingertip_targets is None or fingertip_valid is None:
@@ -1113,6 +1123,8 @@ class LatentWorldPolicyBackend(nn.Module):
             attn_rep = attn_flow.repeat(repeat_steps, *([1] * (attn_flow.ndim - 1)))
             contact = prepared_batch.get("contact_geometry")
             contact_rep = None if contact is None else contact.repeat(repeat_steps, 1, 1)
+            pose = prepared_batch.get("object_pose_condition")
+            pose_rep = None if pose is None else pose.repeat(repeat_steps, 1)
 
             loss_flow = self.flow(
                 h_t=h_t_rep,
@@ -1126,6 +1138,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 actions_mask=actions_mask_rep,
                 attention_mask=attn_rep,
                 contact_geometry=contact_rep,
+                object_pose_condition=pose_rep,
             )
 
             loss_total = (
@@ -1136,6 +1149,8 @@ class LatentWorldPolicyBackend(nn.Module):
                 + self.model_cfg.depth_loss_weight * loss_depth
             )
 
+        if self.model_cfg.action_expert_only:
+            loss_total = loss_flow
         zero = torch.tensor(0.0, device=device, dtype=loss_total.dtype)
         return {
             "loss_flow": loss_flow,
@@ -1195,6 +1210,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 attention_mask=attn_flow,
                 return_padded=bool(return_padded),
                 contact_geometry=prepared_batch.get("contact_geometry"),
+                object_pose_condition=prepared_batch.get("object_pose_condition"),
             )
 
         if not return_intermediates:

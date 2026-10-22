@@ -27,6 +27,7 @@ class LatentWorldPolicyInferBatchBuilder:
         "state_mask",
         "wrist_image",
         "contact_geometry",
+        "object_pose_condition",
     }
     _REQUIRED_INFER_KEYS = {"lang", "primary_image", "action_hz", "embodiment_id"}
 
@@ -204,6 +205,15 @@ class LatentWorldPolicyInferBatchBuilder:
             batch["contact_geometry"] = torch.stack([
                 torch.as_tensor(ex["contact_geometry"], dtype=torch.float32) for ex in examples
             ])
+        if bool(getattr(self.policy_cfg.flow_cfg, "pose_conditioning", False)):
+            from starVLA.model.framework.vlas.pose_conditioning import validate_pose_tensor
+            if any("object_pose_condition" not in ex for ex in examples):
+                raise KeyError("Pose policy requires current object_pose_condition in every observation")
+            values = [torch.as_tensor(ex["object_pose_condition"], dtype=torch.float32) for ex in examples]
+            if any(value.shape != (12,) for value in values):
+                raise ValueError("Each object_pose_condition must be [12]")
+            batch["object_pose_condition"] = torch.stack(values)
+            validate_pose_tensor(batch["object_pose_condition"])
         if not torch.is_tensor(batch["image_grid_thw"]):
             batch["image_grid_thw"] = None
         return self._move_batch_to_device(batch, self._target_device())

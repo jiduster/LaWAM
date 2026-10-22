@@ -82,6 +82,15 @@ def validate_contact_checkpoint_keys(model_keys: set[str], checkpoint_keys: set[
         )
 
 
+def validate_pose_checkpoint_keys(model_keys: set[str], checkpoint_keys: set[str]) -> None:
+    prefixes = ("policy_backend.flow.pose_encoder.", "policy_backend.flow.DiT.pose_attention.")
+    expected = {k for k in model_keys if k.startswith(prefixes)}
+    actual = {k for k in checkpoint_keys if k.startswith(prefixes)}
+    if expected != actual:
+        raise RuntimeError("Pose checkpoint/config mismatch; use the saved config. "
+                           "Baseline-to-pose initialization is training-only.")
+
+
 def log_full_checkpoint_summary(
     *,
     framework_name: str,
@@ -205,6 +214,7 @@ class baseframework(PreTrainedModel):
         model_keys = set(current_state_dict.keys())
         checkpoint_keys = set(model_state_dict.keys())
         validate_contact_checkpoint_keys(model_keys, checkpoint_keys)
+        validate_pose_checkpoint_keys(model_keys, checkpoint_keys)
         framework_name = str(getattr(model_config.framework, "name", "")).lower()
         policy_cfg = getattr(FrameworkModel, "policy_cfg", None)
         require_vlm_action_queries = int(getattr(policy_cfg, "num_vlm_action_queries", 1)) > 0
