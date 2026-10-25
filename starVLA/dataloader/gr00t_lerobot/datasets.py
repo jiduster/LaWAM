@@ -550,6 +550,10 @@ class LeRobotSingleDataset(Dataset):
             Path(str(raw_fingertip_root)).expanduser() if raw_fingertip_root else None
         )
         self._fingertip_episode_cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self._interaction_store = None
+        if hasattr(self.data_cfg, "get") and self.data_cfg.get("load_interaction_geometry", False):
+            from starVLA.interaction_geometry import InteractionStore
+            self._interaction_store = InteractionStore(self.data_cfg.interaction_sidecar_root)
         normalized_mode = str(mode).lower()
         if normalized_mode not in {"train", "val", "test", "all"}:
             raise ValueError(f"Unsupported dataset mode `{mode}`. Expected one of ['train', 'val', 'test'].")
@@ -591,7 +595,7 @@ class LeRobotSingleDataset(Dataset):
         self._load_hf_dataset()
 
         full_trajectory_ids, full_trajectory_lengths = self._get_trajectories()
-        allowed_pose_episodes = self.data_cfg.get("object_pose_episode_indices", None) if hasattr(self.data_cfg, "get") else None
+        allowed_pose_episodes = self.data_cfg.get("episode_indices", self.data_cfg.get("object_pose_episode_indices", None)) if hasattr(self.data_cfg, "get") else None
         if allowed_pose_episodes is not None:
             allowed = set(int(x) for x in allowed_pose_episodes)
             if not allowed or not allowed.issubset(set(full_trajectory_ids.tolist())):
@@ -1521,6 +1525,19 @@ class LeRobotSingleDataset(Dataset):
         if pose.shape != (12,):
             raise ValueError("Current object pose dataset row must be [12]")
         return pose.copy()
+
+    def get_interaction_geometry(self, trajectory_id: int, base_index: int):
+        if self._interaction_store is None:
+            return None
+        episode = self.episodes_hf[self._episode_index_to_row[int(trajectory_id)]]
+        if not 0 <= base_index < int(episode["length"]):
+            raise IndexError("Current geometry frame outside episode")
+        row = self.hf_dataset[int(episode["dataset_from_index"]) + int(base_index)]
+        if int(row["episode_index"]) != trajectory_id or int(row["frame_index"]) != base_index:
+            raise ValueError("Interaction geometry row/time alignment mismatch")
+        return self._interaction_store.frame(
+            self.dataset_name, trajectory_id, base_index, self.action_hz,
+            length=int(episode["length"]), state=row["observation.state"], timestamp=row["timestamp"])
 
     def get_fingertip_data(
         self,
@@ -3009,6 +3026,9 @@ class LeRobotMixtureDataset(Dataset):
         object_pose = dataset.get_object_pose_condition(trajectory_id, base_index)
         if object_pose is not None:
             output["object_pose_condition"] = torch.from_numpy(object_pose)
+        interaction = dataset.get_interaction_geometry(trajectory_id, base_index)
+        if interaction is not None:
+            output["interaction_geometry"], output["interaction_valid"] = interaction
         fingertip_data = dataset.get_fingertip_data(trajectory_id, base_index)
         if fingertip_data is not None:
             output["fingertip_positions"], output["fingertip_valid"] = fingertip_data

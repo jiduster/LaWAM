@@ -1,7 +1,12 @@
-"""Current object pose conditions the action expert only."""
+"""Independent current-pose encoders and residual attention branches."""
 
 import torch
 from torch import nn
+
+
+def pose_conditioning_enabled(policy_cfg):
+    return (bool(getattr(policy_cfg, "plan_pose_conditioning", False))
+            or bool(getattr(policy_cfg.flow_cfg, "pose_conditioning", False)))
 
 
 def validate_pose_tensor(pose: torch.Tensor) -> None:
@@ -59,3 +64,32 @@ class PoseCrossAttention(nn.Module):
         if valid is not None:
             residual = residual * valid.unsqueeze(-1).to(residual.dtype)
         return hidden + residual
+
+
+class PlanningPoseAdapter(nn.Module):
+    """Fuse pose into a private planning feature branch with a small attention width."""
+
+    def __init__(self, feature_dim, token_dim, heads):
+        super().__init__()
+        if token_dim <= 0 or heads <= 0 or token_dim % heads:
+            raise ValueError("plan_pose_token_dim must be positive and divisible by plan_pose_attention_heads")
+        self.norm = nn.LayerNorm(feature_dim)
+        self.context_norm = nn.LayerNorm(token_dim)
+        self.query_projection = nn.Linear(feature_dim, token_dim)
+        self.attention = nn.MultiheadAttention(token_dim, heads, dropout=0.0, batch_first=True)
+        self.output_projection = nn.Linear(token_dim, feature_dim)
+        nn.init.zeros_(self.output_projection.weight)
+        nn.init.zeros_(self.output_projection.bias)
+
+    def forward(self, features, pose_tokens, valid=None):
+        if pose_tokens is None:
+            raise KeyError("Planning pose adapter requires current object_pose_condition")
+        if features.ndim != 3 or pose_tokens.ndim != 3 or features.shape[0] != pose_tokens.shape[0]:
+            raise ValueError("Planning features and pose tokens must have matching [B,L,D] batches")
+        query = self.query_projection(self.norm(features))
+        context = self.context_norm(pose_tokens.to(device=features.device, dtype=query.dtype))
+        residual = self.attention(query, context, context, need_weights=False)[0]
+        residual = self.output_projection(residual)
+        if valid is not None:
+            residual = residual * valid.unsqueeze(-1).to(residual.dtype)
+        return features + residual

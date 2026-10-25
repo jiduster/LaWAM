@@ -194,6 +194,10 @@ class ConditionalFlowMatchingConfig:
     noise_s: float = 0.999
     token_independent_noise: bool = False
     action_loss_weights: Optional[Tuple[float, ...]] = None
+    interaction_conditioning: bool = False
+    interaction_token_dim: int = 128
+    interaction_heads: int = 8
+    interaction_every_n_blocks: int = 1
     pose_conditioning: bool = False
     pose_every_n_blocks: int = 1
     pose_encoder_hidden_dim: int = 128
@@ -262,6 +266,10 @@ class ConditionalFlowMatchingHead(nn.Module):
             "num_layers": self.config.num_layers,
             "interleave_self_attention": self.config.interleave_self_attention,
             "cross_attention_dim": self.config.vision_dim,
+            "interaction_conditioning": self.config.interaction_conditioning,
+            "interaction_token_dim": self.config.interaction_token_dim,
+            "interaction_heads": self.config.interaction_heads,
+            "interaction_every_n_blocks": self.config.interaction_every_n_blocks,
             "pose_conditioning": self.config.pose_conditioning,
             "pose_every_n_blocks": self.config.pose_every_n_blocks,
             "pose_attention_heads": self.config.pose_attention_heads,
@@ -427,6 +435,7 @@ class ConditionalFlowMatchingHead(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         contact_geometry: Optional[torch.Tensor] = None,
         object_pose_condition: Optional[torch.Tensor] = None,
+        interaction_tokens: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         pose_tokens = self._encode_pose(object_pose_condition, h_t.shape[0])
         contact_tokens = self._encode_contact(contact_geometry)
@@ -590,6 +599,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                 timestep=dit_timestep,
                 contact_tokens=contact_tokens,
                 pose_tokens=pose_tokens,
+                interaction_tokens=interaction_tokens,
                 hidden_attention_mask=hidden_attention_mask,
                 image_mask=image_mask,
                 vlm_mask=vlm_mask,
@@ -603,6 +613,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                 timestep=dit_timestep,
                 contact_tokens=contact_tokens,
                 pose_tokens=pose_tokens,
+                interaction_tokens=interaction_tokens,
                 hidden_attention_mask=hidden_attention_mask,
                 encoder_attention_mask=encoder_attention_mask,
                 hidden_positional_embeddings=hidden_positional_embeddings,
@@ -649,6 +660,7 @@ class ConditionalFlowMatchingHead(nn.Module):
         return_padded: bool = False,
         contact_geometry: Optional[torch.Tensor] = None,
         object_pose_condition: Optional[torch.Tensor] = None,
+        interaction_tokens: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         # CFG drops only predicted future vision; current physical state is
         # retained in both branches, like the existing proprioception stream.
@@ -799,6 +811,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                     timestep=timesteps_tensor,
                     contact_tokens=contact_tokens,
                     pose_tokens=pose_tokens,
+                    interaction_tokens=interaction_tokens,
                     hidden_attention_mask=hidden_attention_mask,
                     image_mask=image_mask,
                     vlm_mask=vlm_mask,
@@ -815,6 +828,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                         timestep=timesteps_tensor,
                         contact_tokens=contact_tokens,
                         pose_tokens=pose_tokens,
+                        interaction_tokens=interaction_tokens,
                         hidden_attention_mask=hidden_attention_mask,
                         image_mask=image_mask,
                         vlm_mask=vlm_mask,
@@ -835,6 +849,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                     timestep=timesteps_tensor,
                     contact_tokens=contact_tokens,
                     pose_tokens=pose_tokens,
+                    interaction_tokens=interaction_tokens,
                     hidden_attention_mask=hidden_attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     hidden_positional_embeddings=hidden_positional_embeddings,
@@ -849,6 +864,7 @@ class ConditionalFlowMatchingHead(nn.Module):
                         timestep=timesteps_tensor,
                         contact_tokens=contact_tokens,
                         pose_tokens=pose_tokens,
+                        interaction_tokens=interaction_tokens,
                         hidden_attention_mask=hidden_attention_mask,
                         encoder_attention_mask=encoder_attention_mask,
                         hidden_positional_embeddings=hidden_positional_embeddings,

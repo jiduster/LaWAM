@@ -28,6 +28,8 @@ class LatentWorldPolicyInferBatchBuilder:
         "wrist_image",
         "contact_geometry",
         "object_pose_condition",
+        "interaction_geometry",
+        "interaction_valid",
     }
     _REQUIRED_INFER_KEYS = {"lang", "primary_image", "action_hz", "embodiment_id"}
 
@@ -205,7 +207,8 @@ class LatentWorldPolicyInferBatchBuilder:
             batch["contact_geometry"] = torch.stack([
                 torch.as_tensor(ex["contact_geometry"], dtype=torch.float32) for ex in examples
             ])
-        if bool(getattr(self.policy_cfg.flow_cfg, "pose_conditioning", False)):
+        from starVLA.model.framework.vlas.pose_conditioning import pose_conditioning_enabled
+        if pose_conditioning_enabled(self.policy_cfg):
             from starVLA.model.framework.vlas.pose_conditioning import validate_pose_tensor
             if any("object_pose_condition" not in ex for ex in examples):
                 raise KeyError("Pose policy requires current object_pose_condition in every observation")
@@ -216,6 +219,19 @@ class LatentWorldPolicyInferBatchBuilder:
             validate_pose_tensor(batch["object_pose_condition"])
         if not torch.is_tensor(batch["image_grid_thw"]):
             batch["image_grid_thw"] = None
+        if getattr(self.policy_cfg, "interaction_mode", "none") == "oracle":
+            from starVLA.interaction_geometry import validate_geometry
+            values, masks = [], []
+            for example in examples:
+                if "interaction_geometry" not in example or "interaction_valid" not in example:
+                    raise KeyError("Oracle policy requires live current interaction_geometry/interaction_valid")
+                value = torch.as_tensor(example["interaction_geometry"], dtype=torch.float32)
+                mask = torch.as_tensor(example["interaction_valid"], dtype=torch.bool)
+                validate_geometry(value.numpy(), mask.numpy(), self.policy_cfg.interaction_task)
+                values.append(value)
+                masks.append(mask)
+            batch["interaction_geometry"] = torch.stack(values)
+            batch["interaction_valid"] = torch.stack(masks)
         return self._move_batch_to_device(batch, self._target_device())
 
     @staticmethod

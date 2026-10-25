@@ -9,10 +9,12 @@ from scripts.serve_lawam_pose_action import PoseActionLaWAMPolicy, server
 
 
 def main():
-    for enabled in (False,True):
+    for branch in ('baseline','orange','green'):
+        enabled = branch != 'baseline'
         policy=PoseActionLaWAMPolicy.__new__(PoseActionLaWAMPolicy)
         head=nn.Linear(8,24)
-        backend=SimpleNamespace(flow=SimpleNamespace(pose_encoder=object() if enabled else None),
+        backend=SimpleNamespace(flow=SimpleNamespace(pose_encoder=object() if branch == 'orange' else None),
+            plan_pose_encoder=object() if branch == 'green' else None,
             fingertip_head=head,model_cfg=SimpleNamespace(fingertip_target_mode='endpoint',
             fingertip_target_scale=.1,fingertip_target_center=(0.,0.,1.3)))
         captured=[]
@@ -40,10 +42,10 @@ def main():
         with patch.object(server,'_unnormalize_min_max',side_effect=lambda actions,*a,**kw:actions+1):
             response=policy.infer(obs)
         assert policy._current_object_pose.get() is None
-        if enabled:
+        # Current DexJoCo also forwards optional pose for baseline checkpoints;
+        # the baseline model ignores it. Older server versions omit that field.
+        if enabled or 'object_pose_condition' in captured[0]:
             np.testing.assert_array_equal(captured[0]['object_pose_condition'],pose)
-        else:
-            assert 'object_pose_condition' not in captured[0]
         np.testing.assert_array_equal(captured[0]['state'],np.ones(46)*.5)
         assert len(captured[0]['wrist_image'])==2
         response=msgpack.unpackb(msgpack.packb(response,default=server._pack_array),object_hook=server._unpack_array)
@@ -55,7 +57,7 @@ def main():
             try: policy.infer(obs)
             except KeyError: pass
             else: raise AssertionError('Missing pose must fail')
-    print('POSE_SERVER_OK baseline/orange, pose forwarding, robot normalization, wire codec, actions and endpoint response')
+    print('POSE_SERVER_OK baseline/orange/green, pose forwarding, robot normalization, wire codec, actions and endpoint response')
 
 
 if __name__=='__main__':

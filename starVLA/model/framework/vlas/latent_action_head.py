@@ -3,6 +3,8 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from .pose_conditioning import PlanningPoseAdapter
+
 
 class LatentActionHead(nn.Module):
     """Predict one LAM latent from VLM tokens using an external learned query.
@@ -21,6 +23,10 @@ class LatentActionHead(nn.Module):
         num_heads: int = 8,
         ffn_expansion_factor: float = 4.0,
         dropout: float = 0.0,
+        pose_conditioning: bool = False,
+        pose_fusion: str = "context",
+        pose_token_dim: int = 128,
+        pose_attention_heads: int = 8,
     ) -> None:
         super().__init__()
 
@@ -54,11 +60,23 @@ class LatentActionHead(nn.Module):
             ]
         )
         self.final_norm = nn.LayerNorm(int(lam_code_dim))
+        self.pose_fusion = pose_fusion
+        self.pose_adapter = None
+        if pose_conditioning:
+            if pose_fusion not in {"context", "query"}:
+                raise ValueError("Planning pose fusion must be context or query")
+            # Preserve initialization of all existing modules downstream of the head.
+            with torch.random.fork_rng(devices=[]):
+                self.pose_adapter = PlanningPoseAdapter(
+                    int(vlm_hidden_dim) if pose_fusion == "context" else int(lam_code_dim),
+                    int(pose_token_dim), int(pose_attention_heads),
+                )
 
     def forward(
         self,
         context: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
+        pose_tokens: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if context.ndim != 3 or context.shape[1] == 0:
             raise ValueError(f"Latent action context must be nonempty [B,L,D], got {tuple(context.shape)}.")
@@ -74,6 +92,10 @@ class LatentActionHead(nn.Module):
                 raise ValueError("Every latent action context must contain at least one valid token.")
             key_padding_mask = ~valid
 
+        if self.pose_adapter is not None and self.pose_fusion == "context":
+            # The selected action-query context is a private branch; h_vlm stays intact.
+            context = self.pose_adapter(context, pose_tokens)
+
         bsz = int(context.shape[0])
         queries = self.query.expand(bsz, -1, -1).to(device=context.device, dtype=context.dtype)
         for norm_q, norm_kv, xattn, ffn in zip(self.norm_qs, self.norm_kvs, self.cross_attns, self.ffns):
@@ -82,4 +104,7 @@ class LatentActionHead(nn.Module):
             attn_out, _ = xattn(q, kv, kv, key_padding_mask=key_padding_mask)
             queries = queries + attn_out
             queries = queries + ffn(queries)
+        if self.pose_adapter is not None and self.pose_fusion == "query":
+            # External-QFormer mode conditions its own latent query, never shared VLM tokens.
+            queries = self.pose_adapter(queries, pose_tokens)
         return self.final_norm(queries)

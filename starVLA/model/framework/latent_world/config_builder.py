@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+import math
 from typing import Any
 
 from starVLA.model.framework.vlas.flowmatching_expert import ConditionalFlowMatchingConfig
@@ -127,4 +128,41 @@ class LatentWorldPolicyConfigBuilder:
 
         # Validate head selection before any model or dataloader is constructed.
         _ = policy_cfg.num_vlm_action_queries
+        from starVLA.interaction_geometry import ENTITY_NAMES, FEATURE_DIM
+        mode = str(policy_cfg.interaction_mode)
+        if mode not in {"none", "oracle", "visual", "visual_aux"}:
+            raise ValueError("Unknown interaction_mode")
+        flow = policy_cfg.flow_cfg
+        if bool(flow.interaction_conditioning) != (mode != "none"):
+            raise ValueError("interaction_conditioning must match interaction_mode != none")
+        if mode != "none":
+            if policy_cfg.action_expert_only:
+                raise ValueError("Interaction experiments require full Stage 2: action_expert_only=false")
+            task = str(policy_cfg.interaction_task)
+            if task not in ENTITY_NAMES or int(policy_cfg.interaction_entities) != len(ENTITY_NAMES[task]):
+                raise ValueError("Interaction task/entity schema mismatch")
+            if int(policy_cfg.interaction_feature_dim) != FEATURE_DIM:
+                raise ValueError("Interaction feature dimension does not match schema")
+            dim, heads = int(flow.interaction_token_dim), int(flow.interaction_heads)
+            if min(dim, heads, int(policy_cfg.interaction_queries), int(policy_cfg.interaction_layers)) < 1 or dim % heads:
+                raise ValueError("Invalid interaction token dimensions/heads/layers")
+            if not 1 <= int(flow.interaction_every_n_blocks) <= int(flow.num_layers):
+                raise ValueError("Invalid interaction attention interval")
+            if mode in {"oracle", "visual_aux"} and not policy_cfg.interaction_sidecar_root:
+                raise ValueError("oracle/visual_aux training requires interaction_sidecar_root")
+            if mode in {"oracle", "visual_aux"} and (policy_cfg.interaction_feature_mean is None or policy_cfg.interaction_feature_std is None):
+                raise ValueError("Geometry experiments require training-only feature mean/std")
+        weight = float(policy_cfg.interaction_loss_weight)
+        if not math.isfinite(weight) or (mode == "visual_aux" and weight <= 0) or (mode != "visual_aux" and weight != 0):
+            raise ValueError("Positive interaction_loss_weight is required only for visual_aux")
+        if policy_cfg.plan_pose_conditioning:
+            if policy_cfg.action_expert_only:
+                raise ValueError("Planning pose requires action_expert_only=false")
+            if not policy_cfg.future_prediction or str(policy_cfg.flow_future_feature).lower() != "predicted":
+                raise ValueError("Planning pose requires future_prediction=true and flow_future_feature=predicted")
+            if policy_cfg.plan_pose_position_mean is None or policy_cfg.plan_pose_position_std is None:
+                raise ValueError("Planning pose requires training-only plan_pose_position_mean/std; use train_pose_plan.sh")
+            dim, heads = int(policy_cfg.plan_pose_token_dim), int(policy_cfg.plan_pose_attention_heads)
+            if dim <= 0 or heads <= 0 or dim % heads:
+                raise ValueError("plan_pose_token_dim must be positive and divisible by plan_pose_attention_heads")
         return policy_cfg

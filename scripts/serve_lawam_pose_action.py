@@ -15,7 +15,8 @@ class PoseActionLaWAMPolicy(server.LaWAMPolicy):
         super().__init__(*args, **kwargs)
         self._current_object_pose = ContextVar('lawam_object_pose', default=None)
         original_predict = self.model.predict_action
-        enabled = self.model.policy_backend.flow.pose_encoder is not None
+        enabled = (self.model.policy_backend.flow.pose_encoder is not None
+                   or getattr(self.model.policy_backend, 'plan_pose_encoder', None) is not None)
 
         def predict_with_pose(examples, **predict_kwargs):
             if enabled:
@@ -29,7 +30,8 @@ class PoseActionLaWAMPolicy(server.LaWAMPolicy):
         self.model.predict_action = predict_with_pose
 
     def infer(self, obs):
-        enabled = self.model.policy_backend.flow.pose_encoder is not None
+        enabled = (self.model.policy_backend.flow.pose_encoder is not None
+                   or getattr(self.model.policy_backend, 'plan_pose_encoder', None) is not None)
         pose = None
         if enabled:
             if 'object_pose_condition' not in obs:

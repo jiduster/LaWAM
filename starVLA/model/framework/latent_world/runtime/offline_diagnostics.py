@@ -137,6 +137,7 @@ def diagnose_train_batch(
                         attention_mask=prepared["attention_mask"] == 1,
                         contact_geometry=prepared.get("contact_geometry"),
                         object_pose_condition=prepared.get("object_pose_condition"),
+                        interaction_tokens=shared.interaction_tokens,
                         return_padded=True,
                     )
             if reference_actions is None:

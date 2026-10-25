@@ -28,6 +28,8 @@ from .depth_queries import (
 )
 from .flowmatching_expert import ConditionalFlowMatchingConfig, ConditionalFlowMatchingHead
 from .latent_action_head import LatentActionHead as VLMToLAMQFormer
+from .pose_conditioning import PoseEncoder
+from .interaction_tokens import InteractionTokens, MODES
 
 
 # ============================================================================
@@ -85,6 +87,26 @@ class LatentWorldPolicyConfig:
     num_action_queries: int = 8
     flow_action_num_queries: int = 8
     latent_action_head_type: str = "vlm_queries"  # "vlm_queries" | "external_qformer"
+
+    # Independent multi-entity action conditioning. none/oracle/visual/visual_aux.
+    interaction_mode: str = "none"
+    interaction_task: str = ""
+    interaction_entities: int = 0
+    interaction_feature_dim: int = 17
+    interaction_queries: int = 8
+    interaction_layers: int = 2
+    interaction_loss_weight: float = 0.0
+    interaction_sidecar_root: str = ""
+    interaction_feature_mean: Optional[Tuple[float, ...]] = None
+    interaction_feature_std: Optional[Tuple[float, ...]] = None
+
+    # Green branch: current pose adjusts private planning queries before the LAM latent.
+    plan_pose_conditioning: bool = False
+    plan_pose_token_dim: int = 128
+    plan_pose_hidden_dim: int = 128
+    plan_pose_attention_heads: int = 8
+    plan_pose_position_mean: Optional[Tuple[float, ...]] = None
+    plan_pose_position_std: Optional[Tuple[float, ...]] = None
 
     # DexJoCo fingertip auxiliary prediction. The head is only constructed when
     # the loss weight is positive, so existing checkpoints remain compatible.
@@ -242,6 +264,8 @@ class PolicyEncodingState:
     h_t1_pred: torch.Tensor
     h_t1_gt: torch.Tensor
     h_t_original: torch.Tensor
+    interaction_tokens: Optional[torch.Tensor] = None
+    interaction_prediction: Optional[torch.Tensor] = None
 
 
 # ============================================================================
@@ -338,7 +362,24 @@ class LatentWorldPolicyBackend(nn.Module):
             num_heads=8,
             ffn_expansion_factor=4.0,
             dropout=0.0,
+            pose_conditioning=bool(self.model_cfg.plan_pose_conditioning),
+            pose_fusion="context" if self.num_action_queries > 0 else "query",
+            pose_token_dim=int(self.model_cfg.plan_pose_token_dim),
+            pose_attention_heads=int(self.model_cfg.plan_pose_attention_heads),
         )
+        self.plan_pose_encoder = None
+        if self.model_cfg.plan_pose_conditioning:
+            if self.model_cfg.action_expert_only:
+                raise ValueError("plan_pose_conditioning requires action_expert_only=false and planning losses")
+            if not self.model_cfg.future_prediction or self.model_cfg.flow_future_feature != "predicted":
+                raise ValueError("Planning pose requires future_prediction=true and flow_future_feature=predicted")
+            if self.model_cfg.plan_pose_position_mean is None or self.model_cfg.plan_pose_position_std is None:
+                raise ValueError("Planning pose requires training-only plan_pose_position_mean/std")
+            with torch.random.fork_rng(devices=[]):
+                self.plan_pose_encoder = PoseEncoder(
+                    int(self.model_cfg.plan_pose_token_dim), int(self.model_cfg.plan_pose_hidden_dim),
+                    self.model_cfg.plan_pose_position_mean, self.model_cfg.plan_pose_position_std,
+                )
 
         self.fingertip_head: Optional[nn.Module] = None
         self._fingertip_target_mode = str(self.model_cfg.fingertip_target_mode).lower()
@@ -422,6 +463,19 @@ class LatentWorldPolicyBackend(nn.Module):
             self.configure_action_expert_only()
         self.sync_training_modes(mode=self.training)
 
+        self.interaction_encoder = None
+        if self.model_cfg.interaction_mode != "none":
+            with torch.random.fork_rng(devices=[]):
+                self.interaction_encoder = InteractionTokens(
+                    mode=self.model_cfg.interaction_mode,vision_dim=lam_vision_dim,
+                    vlm_dim=vlm_hidden_dim,state_dim=int(self.model_cfg.flow_cfg.state_dim),
+                    entities=int(self.model_cfg.interaction_entities),
+                    dim=int(self.model_cfg.flow_cfg.interaction_token_dim),
+                    heads=int(self.model_cfg.flow_cfg.interaction_heads),
+                    queries=int(self.model_cfg.interaction_queries),layers=int(self.model_cfg.interaction_layers),
+                    feature_dim=int(self.model_cfg.interaction_feature_dim),
+                    mean=self.model_cfg.interaction_feature_mean,std=self.model_cfg.interaction_feature_std)
+
     def _inject_queries(
         self,
         *,
@@ -470,6 +524,7 @@ class LatentWorldPolicyBackend(nn.Module):
         act_query: Optional[torch.Tensor],
         flow_query: torch.Tensor,
         depth_placeholder_mask: Optional[torch.Tensor] = None,
+        plan_pose_tokens: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         embed = self.vlm.get_input_embeddings()
         if embed is None:
@@ -562,7 +617,7 @@ class LatentWorldPolicyBackend(nn.Module):
             )
         if self.num_action_queries == 0:
             # Both heads read the same full VLM output, including wrist and text tokens.
-            pred_latent = self.vlm_to_lam(hidden, attention_mask=attention_mask)
+            pred_latent = self.vlm_to_lam(hidden, attention_mask=attention_mask, pose_tokens=plan_pose_tokens)
         else:
             bsz = int(hidden.shape[0])
             q = int(self.num_action_queries)
@@ -573,7 +628,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 raise ValueError(
                     f"[LatentWorldPolicyBackend] action hidden count mismatch: got={h_act.shape[0]}, expected={bsz * q}"
                 )
-            pred_latent = self.vlm_to_lam(h_act.view(bsz, q, -1))
+            pred_latent = self.vlm_to_lam(h_act.view(bsz, q, -1), pose_tokens=plan_pose_tokens)
         return {
             "h_vlm": hidden,
             "pred_latent": pred_latent,
@@ -720,6 +775,7 @@ class LatentWorldPolicyBackend(nn.Module):
             self.lam,
             self.flow,
             self.vlm_to_lam,
+            self.plan_pose_encoder,
             self.fingertip_head,
             self.depth_align_head,
             mode=mode,
@@ -944,6 +1000,12 @@ class LatentWorldPolicyBackend(nn.Module):
         act_query, flow_query = self._prepare_queries(device=device, vlm_stage_dtype=vlm_stage_dtype)
 
         with _cuda_autocast(vlm_stage_dtype):
+            plan_pose_tokens = None
+            if self.plan_pose_encoder is not None:
+                pose = prepared_batch.get("object_pose_condition")
+                if pose is None:
+                    raise KeyError("Planning pose requires current object_pose_condition at train and inference time")
+                plan_pose_tokens = self.plan_pose_encoder(pose)
             vlm_out_dict = self._run_vlm_stage(
                 input_ids=prepared_batch["input_ids"],
                 attention_mask=prepared_batch["attention_mask"],
@@ -954,6 +1016,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 act_query=act_query,
                 flow_query=flow_query,
                 depth_placeholder_mask=prepared_batch.get("depth_placeholder_mask"),
+                plan_pose_tokens=plan_pose_tokens,
             )
         h_vlm = vlm_out_dict["h_vlm"]
         pred_action_emb = vlm_out_dict["pred_latent"]
@@ -980,6 +1043,15 @@ class LatentWorldPolicyBackend(nn.Module):
             else:
                 h_t1_pred = h_t
 
+        interaction_tokens, interaction_prediction = None, None
+        if self.interaction_encoder is not None:
+            with _cuda_autocast(torch.float32):
+                interaction_tokens, interaction_prediction = self.interaction_encoder(
+                    current_vision=h_t_original,vlm=h_vlm,
+                    language_mask=prepared_batch["attention_mask"].bool(),
+                    state=prepared_batch["state"],state_mask=prepared_batch["state_mask"],
+                    geometry=prepared_batch.get("interaction_geometry"),
+                    geometry_mask=prepared_batch.get("interaction_valid"))
         return PolicyEncodingState(
             h_vlm=h_vlm,
             pred_action_emb=pred_action_emb,
@@ -987,6 +1059,7 @@ class LatentWorldPolicyBackend(nn.Module):
             h_t1_pred=h_t1_pred,
             h_t1_gt=h_t1_gt,
             h_t_original=h_t_original,
+            interaction_tokens=interaction_tokens,interaction_prediction=interaction_prediction,
         )
 
     def _run_shared_encoding_train(
@@ -1090,6 +1163,18 @@ class LatentWorldPolicyBackend(nn.Module):
                 depth_targets=depth_targets,
             )
 
+        loss_interaction = torch.zeros((),device=device,dtype=torch.float32)
+        if self.interaction_encoder is not None:
+            if self.model_cfg.interaction_mode == "visual_aux":
+                if "interaction_geometry" not in prepared_batch or "interaction_valid" not in prepared_batch:
+                    raise KeyError("visual_aux training requires audited current geometry targets")
+                loss_interaction = self.interaction_encoder.auxiliary_loss(
+                    shared.interaction_prediction,prepared_batch["interaction_geometry"],
+                    prepared_batch["interaction_valid"])
+            else:
+                # Keep control readout parameters in the DDP graph without supervising geometry.
+                loss_interaction = shared.interaction_prediction.sum()*0.0
+
         h_vlm_for_flow = _apply_flow_only_grad_to_h_vlm(
             h_vlm=shared.h_vlm,
             act_placeholder_mask=prepared_batch["act_placeholder_mask"],
@@ -1139,6 +1224,8 @@ class LatentWorldPolicyBackend(nn.Module):
                 attention_mask=attn_rep,
                 contact_geometry=contact_rep,
                 object_pose_condition=pose_rep,
+                **({"interaction_tokens": shared.interaction_tokens.repeat(repeat_steps,1,1)}
+                   if shared.interaction_tokens is not None else {}),
             )
 
             loss_total = (
@@ -1147,6 +1234,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 + self.model_cfg.lam_encoder_distill_weight * loss_distill
                 + self.model_cfg.fingertip_loss_weight * loss_fingertip
                 + self.model_cfg.depth_loss_weight * loss_depth
+                + (self.model_cfg.interaction_loss_weight if self.model_cfg.interaction_mode == "visual_aux" else 1.0) * loss_interaction
             )
 
         if self.model_cfg.action_expert_only:
@@ -1161,6 +1249,7 @@ class LatentWorldPolicyBackend(nn.Module):
             "fingertip_rmse": fingertip_rmse,
             "fingertip_rmse_mm": fingertip_rmse_mm,
             "loss_depth": loss_depth,
+            **({"loss_interaction":loss_interaction} if self.interaction_encoder is not None else {}),
             "loss_total": loss_total,
         }
 
@@ -1211,6 +1300,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 return_padded=bool(return_padded),
                 contact_geometry=prepared_batch.get("contact_geometry"),
                 object_pose_condition=prepared_batch.get("object_pose_condition"),
+                **({"interaction_tokens":shared.interaction_tokens} if shared.interaction_tokens is not None else {}),
             )
 
         if not return_intermediates:

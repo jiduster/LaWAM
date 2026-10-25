@@ -13,6 +13,8 @@ VideoViews = Sequence[Sequence[FrameArray]]
 
 
 class LatentWorldPolicyTrainRawSample(TypedDict):
+    interaction_geometry: NotRequired[torch.Tensor]
+    interaction_valid: NotRequired[torch.Tensor]
     object_pose_condition: NotRequired[torch.Tensor]
     primary_videos: torch.Tensor
     wm_primary_video: NotRequired[torch.Tensor]
@@ -30,6 +32,8 @@ class LatentWorldPolicyTrainRawSample(TypedDict):
 
 
 class LatentWorldPolicyInferExample(TypedDict, total=False):
+    interaction_geometry: NotRequired[TensorLike2D]
+    interaction_valid: NotRequired[TensorLike2D]
     primary_image: Required[ImageViews]
     wm_primary_image: NotRequired[FrameArray]
     lang: Required[str]
@@ -43,6 +47,8 @@ class LatentWorldPolicyInferExample(TypedDict, total=False):
 
 
 class LatentWorldPolicyInferBatch(TypedDict):
+    interaction_geometry: NotRequired[torch.Tensor]
+    interaction_valid: NotRequired[torch.Tensor]
     pixel_values: torch.Tensor
     input_ids: torch.Tensor
     attention_mask: torch.Tensor
@@ -60,6 +66,8 @@ class LatentWorldPolicyInferBatch(TypedDict):
 
 
 class LatentWorldPolicyTrainBatch(TypedDict):
+    interaction_geometry: NotRequired[torch.Tensor]
+    interaction_valid: NotRequired[torch.Tensor]
     pixel_values: torch.Tensor
     input_ids: torch.Tensor
     attention_mask: torch.Tensor

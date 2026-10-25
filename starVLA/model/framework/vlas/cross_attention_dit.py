@@ -27,7 +27,7 @@ from diffusers.models.embeddings import (
 )
 from torch import nn
 from .contact_conditioning import ContactCrossAttention
-from .pose_conditioning import PoseCrossAttention
+from .pose_conditioning import PoseCrossAttention, PlanningPoseAdapter
 
 
 class TimestepEncoder(nn.Module):
@@ -245,6 +245,10 @@ class DiT(ModelMixin, ConfigMixin):
         positional_embeddings: Optional[str] = None,
         interleave_self_attention=False,
         cross_attention_dim: Optional[int] = None,
+        interaction_conditioning: bool = False,
+        interaction_token_dim: int = 128,
+        interaction_heads: int = 8,
+        interaction_every_n_blocks: int = 1,
         pose_conditioning: bool = False,
         pose_every_n_blocks: int = 1,
         pose_attention_heads: int = 8,
@@ -306,6 +310,14 @@ class DiT(ModelMixin, ConfigMixin):
         self.norm_out = nn.LayerNorm(self.inner_dim, elementwise_affine=False, eps=1e-6)
         self.proj_out_1 = nn.Linear(self.inner_dim, 2 * self.inner_dim)
         self.proj_out_2 = nn.Linear(self.inner_dim, self.output_dim)
+        self.interaction_attention = nn.ModuleDict()
+        if interaction_conditioning:
+            if not 1 <= interaction_every_n_blocks <= num_layers:
+                raise ValueError("Invalid interaction attention block interval")
+            with torch.random.fork_rng(devices=[]):
+                self.interaction_attention.update({str(i): PlanningPoseAdapter(
+                    self.inner_dim, interaction_token_dim, interaction_heads)
+                    for i in range(interaction_every_n_blocks-1,num_layers,interaction_every_n_blocks)})
         self.pose_attention = nn.ModuleDict()
         if pose_conditioning:
             if not 1 <= pose_every_n_blocks <= num_layers:
@@ -331,7 +343,10 @@ class DiT(ModelMixin, ConfigMixin):
         hidden_positional_embeddings: Optional[torch.Tensor] = None,
         contact_tokens: Optional[torch.Tensor] = None,
         pose_tokens: Optional[torch.Tensor] = None,
+        interaction_tokens: Optional[torch.Tensor] = None,
     ):
+        if self.interaction_attention and interaction_tokens is None:
+            raise KeyError("Interaction-conditioned DiT requires interaction_tokens")
         if self.pose_attention and pose_tokens is None:
             raise ValueError("Pose-conditioned DiT requires pose_tokens")
         if self.contact_attention and contact_tokens is None:
@@ -368,6 +383,8 @@ class DiT(ModelMixin, ConfigMixin):
                 )
             if str(idx) in self.contact_attention:
                 hidden_states = self.contact_attention[str(idx)](hidden_states, contact_tokens, hidden_attention_mask)
+            if str(idx) in self.interaction_attention:
+                hidden_states = self.interaction_attention[str(idx)](hidden_states, interaction_tokens, hidden_attention_mask)
             if str(idx) in self.pose_attention:
                 hidden_states = self.pose_attention[str(idx)](hidden_states, pose_tokens, hidden_attention_mask)
             all_hidden_states.append(hidden_states)
@@ -407,7 +424,10 @@ class AlternateVLDiT(DiT):
         hidden_positional_embeddings: Optional[torch.Tensor] = None,
         contact_tokens: Optional[torch.Tensor] = None,
         pose_tokens: Optional[torch.Tensor] = None,
+        interaction_tokens: Optional[torch.Tensor] = None,
     ):
+        if self.interaction_attention and interaction_tokens is None:
+            raise KeyError("Interaction-conditioned DiT requires interaction_tokens")
         if self.pose_attention and pose_tokens is None:
             raise ValueError("Pose-conditioned DiT requires pose_tokens")
         if self.contact_attention and contact_tokens is None:
@@ -465,6 +485,8 @@ class AlternateVLDiT(DiT):
                 )
             if str(idx) in self.contact_attention:
                 hidden_states = self.contact_attention[str(idx)](hidden_states, contact_tokens, hidden_attention_mask)
+            if str(idx) in self.interaction_attention:
+                hidden_states = self.interaction_attention[str(idx)](hidden_states, interaction_tokens, hidden_attention_mask)
             if str(idx) in self.pose_attention:
                 hidden_states = self.pose_attention[str(idx)](hidden_states, pose_tokens, hidden_attention_mask)
             all_hidden_states.append(hidden_states)

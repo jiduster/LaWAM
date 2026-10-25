@@ -108,10 +108,24 @@ class TinyLAM(nn.Module):
         return {"quantized": self.latent_encoder(delta).unsqueeze(1)}
 
 
-def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mode=None, contact=False, pose=False, action_only=False):
+def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mode=None, contact=False, pose=False, action_only=False, plan_pose=False, layers=2, interaction="none"):
     cfg = LatentWorldPolicyConfig(
         latent_action_head_type=mode,
         action_expert_only=action_only,
+        interaction_mode=interaction,
+        interaction_task="bimanual_hanoi",
+        interaction_entities=7,
+        interaction_queries=3,
+        interaction_layers=1,
+        interaction_loss_weight=.1 if interaction == "visual_aux" else 0.,
+        interaction_feature_mean=(0.,)*17,
+        interaction_feature_std=(1.,)*17,
+        plan_pose_conditioning=plan_pose,
+        plan_pose_position_mean=(0.1, 0.2, 1.3),
+        plan_pose_position_std=(0.05, 0.06, 0.1),
+        plan_pose_token_dim=16,
+        plan_pose_hidden_dim=16,
+        plan_pose_attention_heads=4,
         future_action_window_size=3,
         action_horizon=4,
         future_prediction=True,
@@ -122,6 +136,9 @@ def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mod
         fingertip_loss_weight=0.05 if fingertip_mode else 0.0,
         fingertip_target_mode=fingertip_mode or "delta",
         flow_cfg=ConditionalFlowMatchingConfig(
+            interaction_conditioning=interaction != "none",
+            interaction_token_dim=16,
+            interaction_heads=4,
             pose_conditioning=pose,
             pose_position_mean=(0.1, 0.2, 1.3),
             pose_position_std=(0.05, 0.06, 0.1),
@@ -134,7 +151,7 @@ def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mod
             vision_dim=8,
             num_vision_tokens=4,
             hidden_dim=32,
-            num_layers=2,
+            num_layers=layers,
             attention_heads=4,
             horizon_sec=0.15,
             use_alternate_vldit=alternate,

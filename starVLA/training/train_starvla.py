@@ -813,8 +813,7 @@ if __name__ == "__main__":
     cli_cfg = OmegaConf.from_dotlist(dotlist)
     cfg = OmegaConf.merge(cfg, cli_cfg)
 
-    # if cfg.is_debug:
-    if cfg.is_debug and dist.is_initialized() and dist.get_rank() == 0:
+    if cfg.get("is_debug", False) and dist.is_initialized() and dist.get_rank() == 0:
         import debugpy
         debugpy.listen(("0.0.0.0", 10092))
         print("🔍 Rank 0 waiting for debugger attach on port 10092...")

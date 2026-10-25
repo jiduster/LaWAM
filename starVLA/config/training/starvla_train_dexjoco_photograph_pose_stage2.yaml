@@ -1,0 +1,326 @@
+# Full Stage 2 rerun with pose, using the original endpoint run's training recipe.
+# Initialize from LaWAM pretrain + the photograph-excluded Stage 1 LAM, not orange.
+# Retain original losses, trainable modules, learning rates, and 40000-step budget.
+# Pose data: 87 audited episodes, split into 86 train / 1 validation.
+# Launch with 8 GPUs: per-device batch 4 x 8 ranks x accumulation 1 = global batch 32.
+datasets:
+  vla_data:
+    balance_dataset_weights: true
+    data_mix: dexjoco_bimanual_photograph
+    data_root_dir: /data/home/zyh/dexjoco/outputs/photograph_object_pose_20261022/lerobot
+    enable_primary_random_resized_crop: false
+    enable_primary_video_aug: false
+    enable_video_frame_cache: false
+    fingertip_sidecar_root: /mnt/ceph2/DexJoCo-Datasets-LeRobot/dexjoco_fingertip_sidecars
+    image_resolution: 256
+    num_frames: 2
+    per_device_batch_size: 4
+    persistent_workers: true
+    sec_chunk: 1.0
+    train_split_all: false
+    val_tail_ratio: 0.01
+    video_backend: pyav
+    load_object_pose: true
+    object_pose_episode_indices:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    - 12
+    - 13
+    - 14
+    - 16
+    - 17
+    - 18
+    - 19
+    - 20
+    - 22
+    - 23
+    - 24
+    - 25
+    - 26
+    - 27
+    - 29
+    - 30
+    - 31
+    - 32
+    - 33
+    - 34
+    - 37
+    - 38
+    - 39
+    - 40
+    - 41
+    - 42
+    - 43
+    - 44
+    - 45
+    - 46
+    - 47
+    - 48
+    - 49
+    - 50
+    - 51
+    - 52
+    - 53
+    - 54
+    - 55
+    - 57
+    - 59
+    - 60
+    - 61
+    - 62
+    - 63
+    - 64
+    - 65
+    - 66
+    - 67
+    - 68
+    - 69
+    - 70
+    - 72
+    - 73
+    - 74
+    - 75
+    - 76
+    - 78
+    - 79
+    - 80
+    - 81
+    - 82
+    - 84
+    - 85
+    - 86
+    - 89
+    - 91
+    - 92
+    - 93
+    - 94
+    - 95
+    - 96
+    - 97
+    - 98
+    - 99
+framework:
+  action_model:
+    action_horizon: 30
+    detach_future_feature: true
+    enable_flow_h_t1_scheduled_sampling: false
+    enable_loss_distill: true
+    fingertip_loss_weight: 0.1
+    fingertip_num_points: 8
+    fingertip_target_mode: endpoint
+    fingertip_target_scale: 0.1
+    flow_action_num_queries: 8
+    flow_cfg:
+      action_dim: 44
+      attend_text_every_n_blocks: 2
+      attention_heads: 16
+      cfg_drop_prob: 0.0
+      cfg_guidance_scale: 1.0
+      hidden_dim: 1024
+      horizon_sec: 1.0
+      interleave_self_attention: true
+      noise_beta_alpha: 1.5
+      noise_beta_beta: 1.0
+      noise_s: 0.999
+      num_inference_steps: 10
+      num_layers: 16
+      num_target_vision_tokens: -1
+      num_timestep_buckets: 1000
+      state_dim: 46
+      token_independent_noise: false
+      use_action_positional_embeddings: true
+      use_alternate_vldit: true
+      use_state: true
+      vlm_dim: 2048
+      pose_conditioning: true
+      pose_every_n_blocks: 1
+      pose_attention_heads: 16
+      pose_encoder_hidden_dim: 128
+      pose_position_mean:
+      - -0.1354795774936545
+      - 0.0023239882481642066
+      - 1.48019800670996
+      pose_position_std:
+      - 0.11770223360496852
+      - 0.10933363371069597
+      - 0.11524090721451016
+    flow_h_t1_pred_prob_end: 1.0
+    flow_h_t1_pred_prob_start: 0.0
+    flow_h_t1_pred_ramp_steps: 10000
+    flow_only_mode: false
+    future_action_window_size: 29
+    future_prediction: true
+    lam_ckpt_path: /data/home/zyh/LaWAM/latent_action_model/logs/dino_large_vae_dexjoco_bimanual_exclude_photograph_fingertip_stage1/pytorch_model.pt
+    lam_encoder_distill_weight: 0.1
+    lam_yaml_path: latent_action_model/logs/dino_large_vae/lam_release/dino_large_vae.yaml
+    latent_action_placeholder_token: <ACT_PH>
+    num_action_queries: 8
+    past_action_window_size: 0
+    perceptual_weight: 0.1
+    repeated_diffusion_steps: 2
+    action_expert_only: false
+  name: LaWAM
+  qwenvl:
+    base_vlm: results/Checkpoints/qwen3_weights
+is_debug: false
+run_id: C_h30_tip_endpoint_pose_stage2_40000_seed2026
+run_root_dir: results/Checkpoints/pose_stage2_orange
+seed: 2026
+trackers: []
+trainer:
+  gradient_accumulation_steps: 1
+  eval_batches: 20
+  eval_interval: 500
+  freeze:
+    freeze_embedding: true
+    freeze_last_llm_layer: true
+    freeze_llm_backbone: false
+    freeze_vision_backbone: false
+    keep_llm_first_n_layers: 16
+    unfreeze_lam_decoder: true
+    unfreeze_llm_last_n_layers: -1
+    unfreeze_vision_merger: true
+  gradient_clipping: 1.0
+  learning_rate:
+    action_model:
+      lr: 0.0001
+      modules:
+      - policy_backend.flow
+    base: 5.0e-05
+    vlm:
+      lr: 2.0e-05
+      modules:
+      - policy_backend.vlm
+    world_model:
+      lr: 5.0e-05
+      modules:
+      - policy_backend.lam.decoder
+  load_pretrained_policy_flow: true
+  load_pretrained_policy_lam: false
+  logging_frequency: 100
+  lr_scheduler_type: cosine_with_min_lr
+  max_train_steps: 40000
+  num_warmup_steps: 1000
+  optimizer:
+    betas:
+    - 0.9
+    - 0.95
+    eps: 1.0e-08
+    weight_decay: 1.0e-08
+  pretrained_checkpoint: /mnt/ceph3/zyh/LaWAM_results/Checkpoints/pretrain/lawam_pretrain/final_model/pytorch_model.pt
+  save_interval: 1000
+  scheduler_specific_kwargs:
+    min_lr: 5.0e-07
+  use_pretrained_dataset_statistics: false
+wandb_entity: null
+wandb_project: finetune-DexJoCo-BimanualPhotograph-H30-TipEndpoint
+pose_data_provenance:
+  mean:
+  - -0.1354795774936545
+  - 0.0023239882481642066
+  - 1.48019800670996
+  std:
+  - 0.11770223360496852
+  - 0.10933363371069597
+  - 0.11524090721451016
+  training_episodes:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
+  - 10
+  - 11
+  - 12
+  - 13
+  - 14
+  - 16
+  - 17
+  - 18
+  - 19
+  - 20
+  - 22
+  - 23
+  - 24
+  - 25
+  - 26
+  - 27
+  - 29
+  - 30
+  - 31
+  - 32
+  - 33
+  - 34
+  - 37
+  - 38
+  - 39
+  - 40
+  - 41
+  - 42
+  - 43
+  - 44
+  - 45
+  - 46
+  - 47
+  - 48
+  - 49
+  - 50
+  - 51
+  - 52
+  - 53
+  - 54
+  - 55
+  - 57
+  - 59
+  - 60
+  - 61
+  - 62
+  - 63
+  - 64
+  - 65
+  - 66
+  - 67
+  - 68
+  - 69
+  - 70
+  - 72
+  - 73
+  - 74
+  - 75
+  - 76
+  - 78
+  - 79
+  - 80
+  - 81
+  - 82
+  - 84
+  - 85
+  - 86
+  - 89
+  - 91
+  - 92
+  - 93
+  - 94
+  - 95
+  - 96
+  - 97
+  - 98
+  validation_episodes:
+  - 99
+  count: 28664
+  dataset_provenance: /data/home/zyh/dexjoco/outputs/photograph_object_pose_20261022/lerobot/bimanual_photograph/object_pose_provenance.json

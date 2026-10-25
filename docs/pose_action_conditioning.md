@@ -149,3 +149,59 @@ actions_normalized = result["normalized_actions"]
 ```
 
 仍需完成的实验是：在可用 GPU 上加载完整基模型做短程微调，再完成配对 10k 训练与 rollout。真实数据已经可供使用，但标签性质仍是通过审计的仿真重建条件；结果应按这一性质解释。本次没有修改原 checkpoint、原数据或外部 DexJoCo 仓库，也保留了原有未提交的 `scripts/visualize_fingertip_subgoal.py`。
+
+## 完整 Stage 2 + pose 重新训练（2026-10-22）
+
+配置：`starVLA/config/training/starvla_train_dexjoco_photograph_pose_stage2.yaml`。
+从原 endpoint run 的完整 Stage 2 配方派生：初始化使用 `results/Checkpoints/pretrain/lawam_pretrain/final_model/pytorch_model.pt`，LAM 使用配置中的 photograph-excluded Stage 1 checkpoint（`load_pretrained_policy_lam=false`，避免被 pretrain 的 LAM 覆盖）。不接着退化的 orange checkpoint 训练。
+
+`action_expert_only=false`；恢复视觉/语言骨干、LaWM decoder、latent/query 路径及 endpoint head 的原训练策略，动作专家和新增 pose 分支一起更新。保留原 embedding/末层冻结规则，以及 LAM encoder/DINO 冻结规则。flow、perceptual、distill、endpoint 四项损失启用，后三项权重均为 0.1。原学习率为 flow（含 pose）1e-4、VLM 2e-5、LaWM decoder/其他参数 5e-5；40000 steps，warmup 1000，batch 每卡 4。每 500 步验证，每 1000 步保存，方便闭环检查中间模型。禁用 wandb，训练日志仍保存。
+
+pose 沿用审计通过的 87 条轨迹（86 train / 1 val），位置统计仅用 train，恢复 endpoint sidecar 加载；该版本重新按原 Stage 2 数据统计流程初始化 action/state 归一化。
+
+```bash
+conda activate lawam
+cd /data/home/zyh/LaWAM
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 NUM_PROCESSES=8 \
+  HF_HOME=/tmp/lawam_pose_hf MPLCONFIGDIR=/tmp/lawam_pose_mpl \
+  bash train_lawam.sh \
+  --config_yaml starVLA/config/training/starvla_train_dexjoco_photograph_pose_stage2.yaml
+```
+
+输出目录为 `results/Checkpoints/pose_stage2_orange/<timestamp>+C_h30_tip_endpoint_pose_stage2_40000_seed2026/`。原 endpoint Stage 2 日志确认使用 8 卡、每卡 batch 4、梯度累积 1，全局 batch 为 32；上面的命令保持这一设置。此前提供的单卡命令全局 batch 只有 4，不等价于原 Stage 2 配方。
+
+这是重新跑完整 Stage 2 的实验，不是“仅改变冻结范围”的严格消融，也不代表已证明 action-expert-only 是此前退化的原因。建议评估中间 checkpoint，不只评估 final。
+
+## 2026-10-23 从中断的完整 Stage 2 继续
+
+原 run：`results/Checkpoints/pose_stage2_orange/20261022_231854+C_h30_tip_endpoint_pose_stage2_40000_seed2026`。日志到 13000 步，但该步文件只有 5,041,270,464 字节且 ZIP 目录损坏，不能用于恢复；成功保存记录到 12000 步。
+
+已从原 run 的 `logs/` 完整启动 YAML 生成 `starVLA/config/training/starvla_train_dexjoco_photograph_pose_stage2_resume12000.yaml`：
+
+- 从 `steps_12000_pytorch_model.pt` 加载，`resume_step=12000`，总步数仍为 40000，还需 28000 次更新。
+- **`load_pretrained_policy_lam=true`**：恢复已经训练的 LaWM；不能沿用首次初始化时的 false。
+- `load_pretrained_policy_flow=true`，`use_pretrained_dataset_statistics=true`，沿用原 run 的 pose 与动作/状态统计、数据划分和学习率曲线。
+- 8 卡、每卡 batch 4、梯度累积 1，全局 batch 32。
+- 输出改到本地 `/data/home/zyh/LaWAM/results/pose_stage2_resume_local/`。原 `results/Checkpoints` 是指向 Ceph 的软链接，排查时该盘使用率 99%，本地约有 592 GiB 可用。
+- 改为每 5000 步保存：15000、20000、25000、30000、35000、40000，再保存 final，模型文件合计约 53.1 GB（49.5 GiB），另需日志空间。未删除旧文件。
+
+```bash
+conda activate lawam
+cd /data/home/zyh/LaWAM
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 NUM_PROCESSES=8 \
+  HF_HOME=/tmp/lawam_pose_hf MPLCONFIGDIR=/tmp/lawam_pose_mpl \
+  bash train_lawam.sh \
+  --config_yaml starVLA/config/training/starvla_train_dexjoco_photograph_pose_stage2_resume12000.yaml
+```
+
+当前 checkpoint 只有模型权重，没有 Adam 动量、随机数和数据迭代器状态；这是权重/步数/学习率续训，并非完整训练状态的精确恢复。启动应显示 `Resuming training ... at step 12000/40000`，不会重新 warmup 或额外再跑 40000 步。训练性能可能受优化器状态重置影响。
+
+恢复前校验：12000 步文件通过完整 ZIP/CRC 检查，并经 `torch.load(weights_only=True, map_location='cpu', mmap=True)` 成功读取 2457 个 state_dict 条目；13000 步文件报 `failed finding central directory`。原日志未留下明确 ENOSPC 异常，文件截断及保存记录缺失确认了保存未完成，但仅凭这些不能独立确定中断原因。
+
+续训 horizon 复核：已对照中断 run 的原始启动 YAML、checkpoint 对应的保存配置和续训 YAML，确认 action_horizon=30、future_action_window_size=29、past_action_window_size=0、horizon_sec=1、sec_chunk=1、action_dim=44、state_dim=46 一致。原运行日志确认 8 卡、全局 batch 32，loader 实际动作频率字段为 30，视频取样偏移 [0,29]。
+
+用续训配置、原 run 的 action/state 统计和真实 train/val 样本重新走生产 loader/collator：两侧 actions=[2,30,44]、state=[2,46]、pose=[2,12]、endpoint=[2,8,3]；endpoint 标签与当前 chunk 最后索引对应。这里只将 tokenizer/图像 processor 换成轻量测试替代对象，没有运行完整 GPU 模型。结果及可复核脚本在 `results/pose_action_diagnosis/stage2_resume_contract.json` 和 `verify_stage2_resume_contract.py`。频率 30 是数据/模型协议字段，不能据此声称 MuJoCo 中执行 30 个动作的物理时长恰好为 1 秒；该环境物理步长沿用原评测设置。
+
+## 绿色规划分支
+
+2026-10-23：已新增独立的 pose → latent head 前 adapter。完整 Stage 2 入口、验证及机器迁移说明见 [pose_plan_conditioning.md](pose_plan_conditioning.md)。默认绿色训练关闭橙色分支；原橙色配置仍可使用。

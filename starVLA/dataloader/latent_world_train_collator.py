@@ -4,6 +4,7 @@ from typing import Any, Sequence
 
 import torch
 from starVLA.contact_geometry import ContactStore
+from starVLA.model.framework.vlas.pose_conditioning import pose_conditioning_enabled
 
 from starVLA.model.framework.latent_world.batch_utils import (
     align_feature_dim_with_mask,
@@ -58,7 +59,7 @@ class LatentWorldTrainCollator:
         )
         self.training = True
         self.pose_store = None
-        if bool(getattr(policy_cfg.flow_cfg, "pose_conditioning", False)):
+        if pose_conditioning_enabled(policy_cfg):
             from starVLA.object_pose import ObjectPoseStore
             self.pose_store = ObjectPoseStore(policy_cfg.object_pose_sidecar_root)
         self.contact_store = None
@@ -151,7 +152,9 @@ class LatentWorldTrainCollator:
         depth_target_seqs: list[torch.Tensor] = []
         contact_frames: list[torch.Tensor] = []
         pose_frames: list[torch.Tensor] = []
-        pose_enabled = bool(getattr(self.policy_cfg.flow_cfg, "pose_conditioning", False))
+        interaction_frames, interaction_masks = [], []
+        interaction_labels = getattr(self.policy_cfg, "interaction_mode", "none") in {"oracle", "visual_aux"}
+        pose_enabled = pose_conditioning_enabled(self.policy_cfg)
         instructions: list[str] = []
         actions_list: list[torch.Tensor] = []
         states_list: list[torch.Tensor] = []
@@ -173,6 +176,15 @@ class LatentWorldTrainCollator:
             instruction = str(sample["lang"])
             embodiment_id = int(sample["embodiment_id"])
             action_hz = float(sample["action_hz"])
+            if interaction_labels:
+                from starVLA.interaction_geometry import validate_geometry
+                if "interaction_geometry" not in sample or "interaction_valid" not in sample:
+                    raise KeyError("oracle/visual_aux requires current interaction_geometry/interaction_valid sidecar labels")
+                value = torch.as_tensor(sample["interaction_geometry"], dtype=torch.float32)
+                valid = torch.as_tensor(sample["interaction_valid"], dtype=torch.bool)
+                validate_geometry(value.numpy(), valid.numpy(), self.policy_cfg.interaction_task)
+                interaction_frames.append(value)
+                interaction_masks.append(valid)
             if pose_enabled:
                 from starVLA.model.framework.vlas.pose_conditioning import validate_pose_tensor
                 value = sample.get("object_pose_condition")
@@ -350,6 +362,9 @@ class LatentWorldTrainCollator:
             batch["fingertip_valid"] = torch.stack(fingertip_valid_list, dim=0)
         if pose_enabled:
             batch["object_pose_condition"] = torch.stack(pose_frames)
+        if interaction_labels:
+            batch["interaction_geometry"] = torch.stack(interaction_frames)
+            batch["interaction_valid"] = torch.stack(interaction_masks)
         if self.contact_store is not None:
             batch["contact_geometry"] = torch.stack(contact_frames)
         if self.depth_enabled:

@@ -1,0 +1,133 @@
+# Template for scripts/train_pose_plan.sh; generator fills data roots and training-only pose stats.
+# Full Stage 2, green only, 8 GPUs x batch 4 x accumulation 1 = global batch 32.
+datasets:
+  vla_data:
+    balance_dataset_weights: true
+    data_mix: dexjoco_bimanual_photograph
+    data_root_dir: null
+    enable_primary_random_resized_crop: false
+    enable_primary_video_aug: false
+    enable_video_frame_cache: false
+    fingertip_sidecar_root: null
+    image_resolution: 256
+    num_frames: 2
+    per_device_batch_size: 4
+    persistent_workers: true
+    sec_chunk: 1.0
+    train_split_all: false
+    val_tail_ratio: 0.01
+    video_backend: pyav
+    load_object_pose: true
+framework:
+  action_model:
+    action_horizon: 30
+    detach_future_feature: true
+    enable_flow_h_t1_scheduled_sampling: false
+    enable_loss_distill: true
+    fingertip_loss_weight: 0.1
+    fingertip_num_points: 8
+    fingertip_target_mode: endpoint
+    fingertip_target_scale: 0.1
+    flow_action_num_queries: 8
+    flow_cfg:
+      action_dim: 44
+      attend_text_every_n_blocks: 2
+      attention_heads: 16
+      cfg_drop_prob: 0.0
+      cfg_guidance_scale: 1.0
+      hidden_dim: 1024
+      horizon_sec: 1.0
+      interleave_self_attention: true
+      noise_beta_alpha: 1.5
+      noise_beta_beta: 1.0
+      noise_s: 0.999
+      num_inference_steps: 10
+      num_layers: 16
+      num_target_vision_tokens: -1
+      num_timestep_buckets: 1000
+      state_dim: 46
+      token_independent_noise: false
+      use_action_positional_embeddings: true
+      use_alternate_vldit: true
+      use_state: true
+      vlm_dim: 2048
+      pose_conditioning: false
+    flow_h_t1_pred_prob_end: 1.0
+    flow_h_t1_pred_prob_start: 0.0
+    flow_h_t1_pred_ramp_steps: 10000
+    flow_only_mode: false
+    future_action_window_size: 29
+    future_prediction: true
+    lam_ckpt_path: latent_action_model/logs/dino_large_vae_dexjoco_bimanual_exclude_photograph_fingertip_stage1/pytorch_model.pt
+    lam_encoder_distill_weight: 0.1
+    lam_yaml_path: latent_action_model/logs/dino_large_vae/lam_release/dino_large_vae.yaml
+    latent_action_placeholder_token: <ACT_PH>
+    num_action_queries: 8
+    past_action_window_size: 0
+    perceptual_weight: 0.1
+    repeated_diffusion_steps: 2
+    action_expert_only: false
+    plan_pose_conditioning: true
+    plan_pose_token_dim: 128
+    plan_pose_hidden_dim: 128
+    plan_pose_attention_heads: 8
+    plan_pose_position_mean: null
+    plan_pose_position_std: null
+    latent_action_head_type: vlm_queries
+    flow_future_feature: predicted
+  name: LaWAM
+  qwenvl:
+    base_vlm: results/Checkpoints/qwen3_weights
+is_debug: false
+run_id: C_h30_tip_endpoint_pose_green_40000_seed2026
+run_root_dir: results/pose_stage2_green_local
+seed: 2026
+trackers: []
+wandb_entity: null
+wandb_project: finetune-DexJoCo-BimanualPhotograph-H30-PoseGreen
+trainer:
+  gradient_accumulation_steps: 1
+  eval_batches: 20
+  eval_interval: 500
+  freeze:
+    freeze_embedding: true
+    freeze_last_llm_layer: true
+    freeze_llm_backbone: false
+    freeze_vision_backbone: false
+    keep_llm_first_n_layers: 16
+    unfreeze_lam_decoder: true
+    unfreeze_llm_last_n_layers: -1
+    unfreeze_vision_merger: true
+  gradient_clipping: 1.0
+  learning_rate:
+    action_model:
+      lr: 0.0001
+      modules:
+      - policy_backend.flow
+    base: 5.0e-05
+    vlm:
+      lr: 2.0e-05
+      modules:
+      - policy_backend.vlm
+    world_model:
+      lr: 5.0e-05
+      modules:
+      - policy_backend.lam.decoder
+  load_pretrained_policy_flow: true
+  load_pretrained_policy_lam: false
+  logging_frequency: 100
+  lr_scheduler_type: cosine_with_min_lr
+  max_train_steps: 40000
+  num_warmup_steps: 1000
+  optimizer:
+    betas:
+    - 0.9
+    - 0.95
+    eps: 1.0e-08
+    weight_decay: 1.0e-08
+  pretrained_checkpoint: results/Checkpoints/pretrain/lawam_pretrain/final_model/pytorch_model.pt
+  save_interval: 5000
+  scheduler_specific_kwargs:
+    min_lr: 5.0e-07
+  use_pretrained_dataset_statistics: false
+  ddp_find_unused_parameters: true
