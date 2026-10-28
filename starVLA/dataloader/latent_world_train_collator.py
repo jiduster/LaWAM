@@ -153,6 +153,9 @@ class LatentWorldTrainCollator:
         contact_frames: list[torch.Tensor] = []
         pose_frames: list[torch.Tensor] = []
         interaction_frames, interaction_masks = [], []
+        future_geometry, future_masks = [], []
+        from starVLA.model.framework.vlas.wm_geometry import WM_MODES
+        wm_labels = getattr(self.policy_cfg, 'interaction_mode', 'none') in WM_MODES
         interaction_labels = getattr(self.policy_cfg, "interaction_mode", "none") in {"oracle", "visual_aux"}
         pose_enabled = pose_conditioning_enabled(self.policy_cfg)
         instructions: list[str] = []
@@ -176,6 +179,19 @@ class LatentWorldTrainCollator:
             instruction = str(sample["lang"])
             embodiment_id = int(sample["embodiment_id"])
             action_hz = float(sample["action_hz"])
+            if wm_labels:
+                from starVLA.interaction_geometry import validate_geometry
+                if 'future_interaction_geometry' not in sample or 'future_interaction_valid' not in sample:
+                    raise KeyError('WM geometry requires future_interaction_geometry/future_interaction_valid')
+                value = torch.as_tensor(sample['future_interaction_geometry'], dtype=torch.float32)
+                valid = torch.as_tensor(sample['future_interaction_valid'], dtype=torch.bool)
+                expected = (int(self.policy_cfg.interaction_entities), int(self.policy_cfg.interaction_feature_dim))
+                if tuple(value.shape) != expected or valid.shape != value.shape:
+                    raise ValueError('Future geometry sample shape mismatch')
+                if valid.any():
+                    validate_geometry(value.numpy(), valid.numpy(), self.policy_cfg.interaction_task)
+                future_geometry.append(value)
+                future_masks.append(valid)
             if interaction_labels:
                 from starVLA.interaction_geometry import validate_geometry
                 if "interaction_geometry" not in sample or "interaction_valid" not in sample:
@@ -365,6 +381,9 @@ class LatentWorldTrainCollator:
         if interaction_labels:
             batch["interaction_geometry"] = torch.stack(interaction_frames)
             batch["interaction_valid"] = torch.stack(interaction_masks)
+        if wm_labels:
+            batch['future_interaction_geometry'] = torch.stack(future_geometry)
+            batch['future_interaction_valid'] = torch.stack(future_masks)
         if self.contact_store is not None:
             batch["contact_geometry"] = torch.stack(contact_frames)
         if self.depth_enabled:

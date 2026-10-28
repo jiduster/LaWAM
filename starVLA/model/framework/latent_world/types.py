@@ -13,6 +13,9 @@ VideoViews = Sequence[Sequence[FrameArray]]
 
 
 class LatentWorldPolicyTrainRawSample(TypedDict):
+    future_interaction_geometry: NotRequired[torch.Tensor]
+    future_interaction_valid: NotRequired[torch.Tensor]
+    future_frame_index: NotRequired[int]
     interaction_geometry: NotRequired[torch.Tensor]
     interaction_valid: NotRequired[torch.Tensor]
     object_pose_condition: NotRequired[torch.Tensor]
@@ -66,6 +69,8 @@ class LatentWorldPolicyInferBatch(TypedDict):
 
 
 class LatentWorldPolicyTrainBatch(TypedDict):
+    future_interaction_geometry: NotRequired[torch.Tensor]
+    future_interaction_valid: NotRequired[torch.Tensor]
     interaction_geometry: NotRequired[torch.Tensor]
     interaction_valid: NotRequired[torch.Tensor]
     pixel_values: torch.Tensor

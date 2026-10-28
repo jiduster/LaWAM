@@ -1539,6 +1539,24 @@ class LeRobotSingleDataset(Dataset):
             self.dataset_name, trajectory_id, base_index, self.action_hz,
             length=int(episode["length"]), state=row["observation.state"], timestamp=row["timestamp"])
 
+    def get_future_interaction_geometry(self, trajectory_id: int, base_index: int, video_key: str):
+        """Use exactly the endpoint index of the WM video; mask padded endpoints."""
+        if not (hasattr(self.data_cfg, 'get') and self.data_cfg.get('load_future_interaction_geometry', False)):
+            return None
+        if self._interaction_store is None:
+            raise ValueError('Future geometry requires load_interaction_geometry and a sidecar store')
+        delta = np.asarray(self.delta_indices[video_key], dtype=np.int64).reshape(-1)
+        if len(delta) < 2 or int(delta[0]) != 0 or int(delta[-1]) <= 0:
+            raise ValueError('Future geometry requires a current/future WM image pair')
+        episode = self.episodes_hf[self._episode_index_to_row[int(trajectory_id)]]
+        length = int(episode['length'])
+        requested = int(base_index) + int(delta[-1])
+        frame = int(np.clip(requested, 0, length - 1))
+        value, valid = self.get_interaction_geometry(trajectory_id, frame)
+        if requested != frame:
+            valid[:] = False
+        return value, valid, frame
+
     def get_fingertip_data(
         self,
         trajectory_id: int,
@@ -3029,6 +3047,10 @@ class LeRobotMixtureDataset(Dataset):
         interaction = dataset.get_interaction_geometry(trajectory_id, base_index)
         if interaction is not None:
             output["interaction_geometry"], output["interaction_valid"] = interaction
+        primary_key = next(key for key in selected_video_keys if not _is_wrist_video_key(key))
+        future_interaction = dataset.get_future_interaction_geometry(trajectory_id, base_index, primary_key)
+        if future_interaction is not None:
+            output['future_interaction_geometry'], output['future_interaction_valid'], output['future_frame_index'] = future_interaction
         fingertip_data = dataset.get_fingertip_data(trajectory_id, base_index)
         if fingertip_data is not None:
             output["fingertip_positions"], output["fingertip_valid"] = fingertip_data

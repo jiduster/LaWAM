@@ -8,6 +8,7 @@ import torch
 def map_policy_train_output(policy_output: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     return {
         "total_loss": policy_output["loss_total"],
+        **{k: policy_output[k] for k in ('loss_wm_geometry', 'wm_position_rmse_m', 'wm_angle_mae_rad') if k in policy_output},
         **({"loss_interaction":policy_output["loss_interaction"]} if "loss_interaction" in policy_output else {}),
         "loss_flow": policy_output["loss_flow"],
         "loss_perceptual": policy_output["loss_perceptual"],

@@ -226,6 +226,22 @@ class InteractionTests(unittest.TestCase):
             self.assertEqual(configs[2].framework.action_model.interaction_queries,configs[3].framework.action_model.interaction_queries)
             self.assertFalse(configs[2].datasets.vla_data.load_interaction_geometry)
             self.assertTrue(configs[3].datasets.vla_data.load_interaction_geometry)
+            from starVLA.model.framework.latent_world.config_builder import LatentWorldPolicyConfigBuilder
+            for mode in ('visual_wm_aux', 'visual_wm_aux_detach'):
+                args.variant = mode
+                future = OmegaConf.load(configure(args)[0])
+                built = LatentWorldPolicyConfigBuilder(future).build()
+                self.assertEqual(future.interaction_experiment.sha256, configs[0].interaction_experiment.sha256)
+                self.assertTrue(future.datasets.vla_data.load_future_interaction_geometry)
+                self.assertFalse(built.flow_cfg.interaction_conditioning)
+                self.assertTrue(built.detach_future_feature)
+                self.assertGreater(built.interaction_loss_weight, 0)
+                for field, value in (('future_prediction', False), ('action_expert_only', True),
+                                     ('flow_future_feature', 'current')):
+                    invalid = copy.deepcopy(future)
+                    invalid.framework.action_model[field] = value
+                    with self.assertRaises(ValueError):
+                        LatentWorldPolicyConfigBuilder(invalid).build()
             meta['accepted_episodes'] = [0, 1]
             meta['acceptance_policy'] = 'user_accepted_reconstruction'
             (side/'manifest.json').write_text(json.dumps(meta))

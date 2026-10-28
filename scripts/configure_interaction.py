@@ -12,6 +12,7 @@ from starVLA.interaction_geometry import ENTITY_NAMES, FEATURE_DIM, InteractionS
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / 'starVLA/config/training/starvla_train_dexjoco_interaction_stage2.yaml'
 VARIANTS = ('baseline', 'oracle', 'visual', 'visual_aux')
+WM_VARIANTS = ('visual_wm_aux', 'visual_wm_aux_detach')
 TASKS = {'hanoi': 'bimanual_hanoi', 'microwave': 'bimanual_microwave_cook'}
 
 
@@ -41,7 +42,7 @@ def configure(args):
         audit_store(store, task, dataset, fps, ids)
         acceptance = {k: manifest.get(k) for k in (
             "label_source", "acceptance_policy", "acceptance_note", "source_manifest_sha256")}
-    if any(v in ('oracle', 'visual_aux') for v in variants):
+    if any(v in ('oracle', 'visual_aux', *WM_VARIANTS) for v in variants):
         if args.sidecar_root is None:
             raise ValueError('Oracle/Visual Aux need --sidecar-root with approved current-frame geometry')
         store = InteractionStore(args.sidecar_root)
@@ -110,18 +111,27 @@ def configure(args):
     for variant in variants:
         current = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
         policy = current.framework.action_model
-        enabled, labels = variant != 'baseline', variant in ('oracle', 'visual_aux')
+        wm_mode = variant in WM_VARIANTS
+        enabled, labels = variant != 'baseline', variant in ('oracle', 'visual_aux', *WM_VARIANTS)
         policy.interaction_mode = 'none' if not enabled else variant
         policy.interaction_task = task
         policy.interaction_entities = len(ENTITY_NAMES[task])
         policy.interaction_feature_dim = FEATURE_DIM
-        policy.interaction_loss_weight = args.aux_weight if variant == 'visual_aux' else 0
-        policy.flow_cfg.interaction_conditioning = enabled
+        policy.interaction_loss_weight = args.aux_weight if variant in ('visual_aux', *WM_VARIANTS) else 0
+        policy.flow_cfg.interaction_conditioning = enabled and not wm_mode
+        if wm_mode:
+            # This auxiliary branch has no route to the action expert except via future DINO.
+            from starVLA.model.framework.vlas.wm_geometry import dynamic_geometry_mask
+            current.interaction_experiment.future_geometry = dict(
+                timestamp='last sampled WM video frame; padded endpoints masked',
+                supervision_mask=dynamic_geometry_mask(task).tolist(),
+                detach=variant == 'visual_wm_aux_detach', weight=args.aux_weight)
         if labels:
             policy.interaction_sidecar_root = str(args.sidecar_root.expanduser().resolve())
             policy.interaction_feature_mean = stats['mean']
             policy.interaction_feature_std = stats['std']
         current.datasets.vla_data.load_interaction_geometry = labels
+        current.datasets.vla_data.load_future_interaction_geometry = wm_mode
         current.datasets.vla_data.interaction_sidecar_root = str(args.sidecar_root.expanduser().resolve()) if labels else ''
         current.run_id = f'{task}_interaction_{variant}_h30_{args.steps}_seed{args.seed}'
         current.run_root_dir = str(args.output_root.expanduser().resolve()/task/variant)
@@ -141,7 +151,7 @@ def configure(args):
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--task', required=True, choices=tuple(TASKS)+tuple(ENTITY_NAMES))
-    p.add_argument('--variant', default='all', choices=('all',)+VARIANTS)
+    p.add_argument('--variant', default='all', choices=('all',)+VARIANTS+WM_VARIANTS)
     p.add_argument('--data-root', type=Path, required=True)
     p.add_argument('--sidecar-root', type=Path)
     p.add_argument('--episodes', type=Path, help='Same explicit JSON episode list for all four variants; default all episodes')

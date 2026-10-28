@@ -1,5 +1,8 @@
 # Multi-object Interaction Experiments
 
+The future-DINO auxiliary experiments `visual_wm_aux` and
+`visual_wm_aux_detach` are documented in [wm_geometry_aux.md](wm_geometry_aux.md).
+
 ## Accepted reconstructed-label runs (2026-10-25)
 
 The user explicitly accepted the supplied reconstructed poses after visual inspection.

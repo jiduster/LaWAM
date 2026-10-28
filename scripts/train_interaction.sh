@@ -11,7 +11,7 @@ if [[ "$NUM_PROCESSES" != 8 ]]; then
   exit 1
 fi
 if [[ $# -lt 2 ]]; then
-  echo 'Usage: bash scripts/train_interaction.sh {hanoi|microwave} {baseline|oracle|visual|visual_aux} [--dry-run]' >&2
+  echo 'Usage: bash scripts/train_interaction.sh {hanoi|microwave} {baseline|oracle|visual|visual_aux|visual_wm_aux|visual_wm_aux_detach} [--dry-run]' >&2
   exit 1
 fi
 task="$1"
@@ -23,6 +23,7 @@ args=(--task "$task" --variant "$variant" --data-root "$INTERACTION_DATA_ROOT"
       --asset-root "${LAWAM_ASSET_ROOT:-$PWD}" --config-root "$config_root"
       --output-root "${INTERACTION_OUTPUT_ROOT:-$PWD/results/Checkpoints/interaction}"
       --steps "${INTERACTION_STEPS:-40000}" --seed "${INTERACTION_SEED:-2026}")
+args+=(--aux-weight "${INTERACTION_AUX_WEIGHT:-0.1}")
 [[ -z "${INTERACTION_SIDECAR_ROOT:-}" ]] || args+=(--sidecar-root "$INTERACTION_SIDECAR_ROOT")
 [[ -z "${INTERACTION_EPISODES:-}" ]] || args+=(--episodes "$INTERACTION_EPISODES")
 [[ -z "${FINGERTIP_ROOT:-}" ]] || args+=(--fingertip-root "$FINGERTIP_ROOT")

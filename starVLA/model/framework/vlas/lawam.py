@@ -30,6 +30,7 @@ from .flowmatching_expert import ConditionalFlowMatchingConfig, ConditionalFlowM
 from .latent_action_head import LatentActionHead as VLMToLAMQFormer
 from .pose_conditioning import PoseEncoder
 from .interaction_tokens import InteractionTokens, MODES
+from .wm_geometry import FutureGeometryHead, WM_MODES
 
 
 # ============================================================================
@@ -88,7 +89,7 @@ class LatentWorldPolicyConfig:
     flow_action_num_queries: int = 8
     latent_action_head_type: str = "vlm_queries"  # "vlm_queries" | "external_qformer"
 
-    # Independent multi-entity action conditioning. none/oracle/visual/visual_aux.
+    # Current action conditioning or training-only visual_wm_aux[_detach].
     interaction_mode: str = "none"
     interaction_task: str = ""
     interaction_entities: int = 0
@@ -464,7 +465,7 @@ class LatentWorldPolicyBackend(nn.Module):
         self.sync_training_modes(mode=self.training)
 
         self.interaction_encoder = None
-        if self.model_cfg.interaction_mode != "none":
+        if self.model_cfg.interaction_mode in MODES[1:]:
             with torch.random.fork_rng(devices=[]):
                 self.interaction_encoder = InteractionTokens(
                     mode=self.model_cfg.interaction_mode,vision_dim=lam_vision_dim,
@@ -475,6 +476,19 @@ class LatentWorldPolicyBackend(nn.Module):
                     queries=int(self.model_cfg.interaction_queries),layers=int(self.model_cfg.interaction_layers),
                     feature_dim=int(self.model_cfg.interaction_feature_dim),
                     mean=self.model_cfg.interaction_feature_mean,std=self.model_cfg.interaction_feature_std)
+        self.wm_geometry_head = None
+        if self.model_cfg.interaction_mode in WM_MODES:
+            if self.model_cfg.action_expert_only or not self.model_cfg.future_prediction:
+                raise ValueError('Future geometry supervision requires full Stage 2 with future_prediction=true')
+            # Preserve policy initialization and diffusion RNG across the two controls.
+            with torch.random.fork_rng(devices=[]):
+                self.wm_geometry_head = FutureGeometryHead(
+                    vision_dim=lam_vision_dim, task=self.model_cfg.interaction_task,
+                    dim=int(self.model_cfg.flow_cfg.interaction_token_dim),
+                    heads=int(self.model_cfg.flow_cfg.interaction_heads),
+                    layers=int(self.model_cfg.interaction_layers),
+                    mean=self.model_cfg.interaction_feature_mean, std=self.model_cfg.interaction_feature_std,
+                    detach=self.model_cfg.interaction_mode == 'visual_wm_aux_detach')
 
     def _inject_queries(
         self,
@@ -1163,6 +1177,17 @@ class LatentWorldPolicyBackend(nn.Module):
                 depth_targets=depth_targets,
             )
 
+        loss_wm_geometry = torch.zeros((), device=device, dtype=torch.float32)
+        wm_position_rmse = torch.zeros_like(loss_wm_geometry)
+        wm_angle_mae = torch.zeros_like(loss_wm_geometry)
+        if self.wm_geometry_head is not None:
+            if 'future_interaction_geometry' not in prepared_batch or 'future_interaction_valid' not in prepared_batch:
+                raise KeyError('Future geometry supervision requires aligned future sidecar labels')
+            with _cuda_autocast(torch.float32):
+                prediction = self.wm_geometry_head(shared.h_t1_pred)
+                loss_wm_geometry, wm_position_rmse, wm_angle_mae = self.wm_geometry_head.loss(
+                    prediction, prepared_batch['future_interaction_geometry'], prepared_batch['future_interaction_valid'])
+
         loss_interaction = torch.zeros((),device=device,dtype=torch.float32)
         if self.interaction_encoder is not None:
             if self.model_cfg.interaction_mode == "visual_aux":
@@ -1234,6 +1259,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 + self.model_cfg.lam_encoder_distill_weight * loss_distill
                 + self.model_cfg.fingertip_loss_weight * loss_fingertip
                 + self.model_cfg.depth_loss_weight * loss_depth
+                + self.model_cfg.interaction_loss_weight * loss_wm_geometry
                 + (self.model_cfg.interaction_loss_weight if self.model_cfg.interaction_mode == "visual_aux" else 1.0) * loss_interaction
             )
 
@@ -1249,6 +1275,8 @@ class LatentWorldPolicyBackend(nn.Module):
             "fingertip_rmse": fingertip_rmse,
             "fingertip_rmse_mm": fingertip_rmse_mm,
             "loss_depth": loss_depth,
+            **({"loss_wm_geometry": loss_wm_geometry, "wm_position_rmse_m": wm_position_rmse,
+                "wm_angle_mae_rad": wm_angle_mae} if self.wm_geometry_head is not None else {}),
             **({"loss_interaction":loss_interaction} if self.interaction_encoder is not None else {}),
             "loss_total": loss_total,
         }

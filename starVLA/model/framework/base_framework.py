@@ -83,7 +83,7 @@ def validate_contact_checkpoint_keys(model_keys: set[str], checkpoint_keys: set[
 
 
 def validate_pose_checkpoint_keys(model_keys: set[str], checkpoint_keys: set[str]) -> None:
-    prefixes = ("policy_backend.interaction_encoder.", "policy_backend.flow.DiT.interaction_attention.",
+    prefixes = ("policy_backend.wm_geometry_head.", "policy_backend.interaction_encoder.", "policy_backend.flow.DiT.interaction_attention.",
                 "policy_backend.flow.pose_encoder.", "policy_backend.flow.DiT.pose_attention.",
                 "policy_backend.plan_pose_encoder.", "policy_backend.vlm_to_lam.pose_adapter.")
     expected = {k for k in model_keys if k.startswith(prefixes)}

@@ -129,12 +129,18 @@ class LatentWorldPolicyConfigBuilder:
         # Validate head selection before any model or dataloader is constructed.
         _ = policy_cfg.num_vlm_action_queries
         from starVLA.interaction_geometry import ENTITY_NAMES, FEATURE_DIM
+        from starVLA.model.framework.vlas.wm_geometry import WM_MODES
         mode = str(policy_cfg.interaction_mode)
-        if mode not in {"none", "oracle", "visual", "visual_aux"}:
+        wm_mode = mode in WM_MODES
+        labels = mode in {"oracle", "visual_aux", *WM_MODES}
+        if mode not in {"none", "oracle", "visual", "visual_aux", *WM_MODES}:
             raise ValueError("Unknown interaction_mode")
         flow = policy_cfg.flow_cfg
-        if bool(flow.interaction_conditioning) != (mode != "none"):
-            raise ValueError("interaction_conditioning must match interaction_mode != none")
+        if bool(flow.interaction_conditioning) != (mode in {"oracle", "visual", "visual_aux"}):
+            raise ValueError("interaction_conditioning is enabled only for oracle/visual/visual_aux")
+        if wm_mode and (not policy_cfg.future_prediction or policy_cfg.flow_future_feature != 'predicted'
+                        or policy_cfg.enable_flow_h_t1_scheduled_sampling):
+            raise ValueError('WM geometry requires predicted future features without scheduled sampling')
         if mode != "none":
             if policy_cfg.action_expert_only:
                 raise ValueError("Interaction experiments require full Stage 2: action_expert_only=false")
@@ -148,13 +154,14 @@ class LatentWorldPolicyConfigBuilder:
                 raise ValueError("Invalid interaction token dimensions/heads/layers")
             if not 1 <= int(flow.interaction_every_n_blocks) <= int(flow.num_layers):
                 raise ValueError("Invalid interaction attention interval")
-            if mode in {"oracle", "visual_aux"} and not policy_cfg.interaction_sidecar_root:
-                raise ValueError("oracle/visual_aux training requires interaction_sidecar_root")
-            if mode in {"oracle", "visual_aux"} and (policy_cfg.interaction_feature_mean is None or policy_cfg.interaction_feature_std is None):
+            if labels and not policy_cfg.interaction_sidecar_root:
+                raise ValueError("Geometry supervision requires interaction_sidecar_root")
+            if labels and (policy_cfg.interaction_feature_mean is None or policy_cfg.interaction_feature_std is None):
                 raise ValueError("Geometry experiments require training-only feature mean/std")
         weight = float(policy_cfg.interaction_loss_weight)
-        if not math.isfinite(weight) or (mode == "visual_aux" and weight <= 0) or (mode != "visual_aux" and weight != 0):
-            raise ValueError("Positive interaction_loss_weight is required only for visual_aux")
+        auxiliary = mode in {'visual_aux', *WM_MODES}
+        if not math.isfinite(weight) or (auxiliary and weight <= 0) or (not auxiliary and weight != 0):
+            raise ValueError("Positive interaction_loss_weight is required only for geometry auxiliary modes")
         if policy_cfg.plan_pose_conditioning:
             if policy_cfg.action_expert_only:
                 raise ValueError("Planning pose requires action_expert_only=false")
