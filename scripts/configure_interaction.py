@@ -130,6 +130,10 @@ def configure(args):
             policy.interaction_sidecar_root = str(args.sidecar_root.expanduser().resolve())
             policy.interaction_feature_mean = stats['mean']
             policy.interaction_feature_std = stats['std']
+            # Estimated-pose visual_aux may have fully masked frames. Oracle stays strict.
+            sidecar_manifest = InteractionStore(args.sidecar_root).manifest(task)
+            policy.interaction_allow_empty_frames = (
+                bool(sidecar_manifest.get('allow_empty_frames', False)) and variant != 'oracle')
         current.datasets.vla_data.load_interaction_geometry = labels
         current.datasets.vla_data.load_future_interaction_geometry = wm_mode
         current.datasets.vla_data.interaction_sidecar_root = str(args.sidecar_root.expanduser().resolve()) if labels else ''

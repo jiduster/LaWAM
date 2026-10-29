@@ -1,0 +1,57 @@
+{
+  "config": "starVLA/config/training/starvla_train_sharpa_bimanual.yaml",
+  "splits": [
+    {
+      "split": "train",
+      "episodes": 99,
+      "actions": [
+        2,
+        30,
+        58
+      ],
+      "state": [
+        2,
+        58
+      ],
+      "action_offsets": [
+        0,
+        29
+      ],
+      "video_offsets": [
+        0,
+        29
+      ],
+      "fps": 20.0,
+      "visual_interval_sec": 1.45,
+      "flow_loss": 1.1701030731201172,
+      "language": "open the package",
+      "episode_end_clamping": "passed"
+    },
+    {
+      "split": "val",
+      "episodes": 1,
+      "actions": [
+        2,
+        30,
+        58
+      ],
+      "state": [
+        2,
+        58
+      ],
+      "action_offsets": [
+        0,
+        29
+      ],
+      "video_offsets": [
+        0,
+        29
+      ],
+      "fps": 20.0,
+      "visual_interval_sec": 1.45,
+      "flow_loss": 1.232864260673523,
+      "language": "fold both lids of the package open",
+      "episode_end_clamping": "passed"
+    }
+  ]
+}

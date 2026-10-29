@@ -21,12 +21,16 @@ ENTITY_NAMES = {
 }
 
 
-def validate_geometry(value, valid, task):
+def validate_geometry(value, valid, task, allow_empty_frames=False):
     value, valid = np.asarray(value), np.asarray(valid)
     expected = (len(ENTITY_NAMES[task]), FEATURE_DIM)
     if value.shape[-2:] != expected or valid.shape != value.shape or valid.dtype != np.bool_:
         raise ValueError(f"Expected interaction geometry/mask [...,{expected}], got {value.shape}/{valid.shape}")
-    if not np.isfinite(value[valid]).all() or not valid.any(axis=(-2, -1)).all():
+    if not np.isfinite(value[valid]).all():
+        raise ValueError("Interaction geometry needs finite values on every valid feature")
+    # Estimated-pose visual_aux may mask every object in a frame. Oracle keeps the
+    # old contract: every frame must still expose at least one valid feature.
+    if not allow_empty_frames and not valid.any(axis=(-2, -1)).all():
         raise ValueError("Interaction geometry needs finite valid features in every frame")
     for start in (3, 6):
         axis_valid = valid[..., start:start+3].all(-1)
@@ -129,7 +133,9 @@ class InteractionStore:
                 values = {name: z[name].copy() for name in (
                     "interaction_geometry", "interaction_valid", "frame_index", "timestamp", "state", "action")}
             n = int(entry["length"])
-            validate_geometry(values["interaction_geometry"], values["interaction_valid"], task)
+            validate_geometry(
+                values["interaction_geometry"], values["interaction_valid"], task,
+                allow_empty_frames=bool(meta.get("allow_empty_frames", False)))
             if (values["interaction_geometry"].shape != (n, len(ENTITY_NAMES[task]), FEATURE_DIM)
                     or values["state"].shape != (n, 46)
                     or values["action"].shape != (n, 44)

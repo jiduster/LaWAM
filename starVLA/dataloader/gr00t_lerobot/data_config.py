@@ -965,6 +965,14 @@ class DexJoCoBimanualDataConfig:
         return _build_composed_transform(transforms, self.state_keys, self.action_keys)
 
 
+class SharpaSingleArmDataConfig(DexJoCoSingleHandDataConfig):
+    """29-D Panda+Sharpa arm. State and action are controller-order joint targets."""
+
+
+class SharpaBimanualDataConfig(DexJoCoBimanualDataConfig):
+    """58-D dual Panda+Sharpa. Three cameras: base, left wrist, right wrist."""
+
+
 ###########################################################################################
 
 
@@ -1863,6 +1871,9 @@ ROBOT_TYPE_CONFIG_MAP = {
     "PandaOmron": PandaOmronDataConfig(),
     "dexjoco_single": DexJoCoSingleHandDataConfig(),
     "dexjoco_bimanual": DexJoCoBimanualDataConfig(),
+    "sharpa_left": SharpaSingleArmDataConfig(),
+    "sharpa_right": SharpaSingleArmDataConfig(),
+    "sharpa_bimanual": SharpaBimanualDataConfig(),
     "fractal": FractalDataConfig(),
     "fold_towel": FoldTowelDataConfig(),
 }

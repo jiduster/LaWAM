@@ -62,6 +62,18 @@ class EmbodimentTag(Enum):
     """
     DexJoCo bimanual dexterous manipulation datasets.
     """
+    SHARPA_LEFT = "sharpa_left"
+    """
+    DexArena single left Panda + Sharpa hand.
+    """
+    SHARPA_RIGHT = "sharpa_right"
+    """
+    DexArena single right Panda + Sharpa hand.
+    """
+    SHARPA_BIMANUAL = "sharpa_bimanual"
+    """
+    DexArena dual Panda + Sharpa hands.
+    """
     FRANKA_FR3_DUAL = 'franka_fr3_dual'
     """
     The Dual Franka Emika Panda robot.
@@ -88,6 +100,9 @@ EMBODIMENT_TAG_MAPPING = {
     EmbodimentTag.NEW_EMBODIMENT.value: 31,
     EmbodimentTag.DEXJOCO_SINGLE.value: 27,
     EmbodimentTag.DEXJOCO_BIMANUAL.value: 28,
+    EmbodimentTag.SHARPA_LEFT.value: 29,
+    EmbodimentTag.SHARPA_RIGHT.value: 30,
+    EmbodimentTag.SHARPA_BIMANUAL.value: 16,
     EmbodimentTag.OXE_DROID.value: 17,
     EmbodimentTag.OXE_BRIDGE.value: 18,
     EmbodimentTag.OXE_RT1.value: 19,
@@ -112,6 +127,9 @@ ROBOT_TYPE_TO_EMBODIMENT_TAG = {
     "fold_towel": EmbodimentTag.NEW_EMBODIMENT,
     "dexjoco_single": EmbodimentTag.DEXJOCO_SINGLE,
     "dexjoco_bimanual": EmbodimentTag.DEXJOCO_BIMANUAL,
+    "sharpa_left": EmbodimentTag.SHARPA_LEFT,
+    "sharpa_right": EmbodimentTag.SHARPA_RIGHT,
+    "sharpa_bimanual": EmbodimentTag.SHARPA_BIMANUAL,
     "gr1": EmbodimentTag.GR1,
     "gr1_joint_eef": EmbodimentTag.GR1,
     "agibot_genie": EmbodimentTag.AGIBOT_GENIE1,

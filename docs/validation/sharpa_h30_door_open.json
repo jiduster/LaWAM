@@ -1,0 +1,57 @@
+{
+  "config": "starVLA/config/training/starvla_train_sharpa_door_open.yaml",
+  "splits": [
+    {
+      "split": "train",
+      "episodes": 99,
+      "actions": [
+        2,
+        30,
+        29
+      ],
+      "state": [
+        2,
+        29
+      ],
+      "action_offsets": [
+        0,
+        29
+      ],
+      "video_offsets": [
+        0,
+        29
+      ],
+      "fps": 20.0,
+      "visual_interval_sec": 1.45,
+      "flow_loss": 1.3886343240737915,
+      "language": "open the door of the cabinet",
+      "episode_end_clamping": "passed"
+    },
+    {
+      "split": "val",
+      "episodes": 1,
+      "actions": [
+        2,
+        30,
+        29
+      ],
+      "state": [
+        2,
+        29
+      ],
+      "action_offsets": [
+        0,
+        29
+      ],
+      "video_offsets": [
+        0,
+        29
+      ],
+      "fps": 20.0,
+      "visual_interval_sec": 1.45,
+      "flow_loss": 1.4509611129760742,
+      "language": "pull the cabinet door open",
+      "episode_end_clamping": "passed"
+    }
+  ]
+}

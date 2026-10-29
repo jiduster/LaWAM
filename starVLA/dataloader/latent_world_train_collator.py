@@ -198,7 +198,13 @@ class LatentWorldTrainCollator:
                     raise KeyError("oracle/visual_aux requires current interaction_geometry/interaction_valid sidecar labels")
                 value = torch.as_tensor(sample["interaction_geometry"], dtype=torch.float32)
                 valid = torch.as_tensor(sample["interaction_valid"], dtype=torch.bool)
-                validate_geometry(value.numpy(), valid.numpy(), self.policy_cfg.interaction_task)
+                allow_empty = (
+                    getattr(self.policy_cfg, "interaction_mode", "none") != "oracle"
+                    and bool(getattr(self.policy_cfg, "interaction_allow_empty_frames", False))
+                )
+                validate_geometry(
+                    value.numpy(), valid.numpy(), self.policy_cfg.interaction_task,
+                    allow_empty_frames=allow_empty)
                 interaction_frames.append(value)
                 interaction_masks.append(valid)
             if pose_enabled:

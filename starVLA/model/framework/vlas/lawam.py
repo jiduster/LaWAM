@@ -100,6 +100,8 @@ class LatentWorldPolicyConfig:
     interaction_sidecar_root: str = ""
     interaction_feature_mean: Optional[Tuple[float, ...]] = None
     interaction_feature_std: Optional[Tuple[float, ...]] = None
+    # Estimated-pose visual_aux may mask every object in a frame; oracle stays strict.
+    interaction_allow_empty_frames: bool = False
 
     # Green branch: current pose adjusts private planning queries before the LAM latent.
     plan_pose_conditioning: bool = False

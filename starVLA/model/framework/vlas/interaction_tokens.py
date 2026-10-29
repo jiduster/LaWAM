@@ -106,7 +106,10 @@ class InteractionTokens(nn.Module):
         if target.shape != prediction.shape or valid.shape != prediction.shape:
             raise ValueError('Interaction auxiliary target/mask shape mismatch')
         valid=valid.bool()
-        if not valid.any() or not torch.isfinite(target[valid]).all():
+        if not valid.any():
+            # Empty estimated-pose frames contribute only action loss.
+            return prediction.float().sum() * 0.0
+        if not torch.isfinite(target[valid]).all():
             raise ValueError('Interaction supervision requires finite valid targets')
         safe=torch.where(valid,target,torch.zeros_like(target))
         loss=F.smooth_l1_loss(prediction.float(),self.normalize(safe),reduction='none')

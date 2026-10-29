@@ -122,9 +122,11 @@ def _build_fallback_lerobot_modality_meta(dataset_path: Path) -> LeRobotModality
     ]
     non_wrist_video_names = [name for name in video_feature_names if not _is_wrist_video_key(name)]
     wrist_video_names = [name for name in video_feature_names if _is_wrist_video_key(name)]
-    looks_bimanual = len(wrist_video_names) >= 2 or any(
-        ("left" in name.lower() or "right" in name.lower()) for name in wrist_video_names
-    )
+    # A single wrist camera is often named left_wrist or right_wrist for the arm it
+    # belongs to. That is still one view. Dual-wrist only when both sides exist.
+    left_wrist_names = [name for name in wrist_video_names if "left" in name.lower()]
+    right_wrist_names = [name for name in wrist_video_names if "right" in name.lower()]
+    looks_bimanual = bool(left_wrist_names) and bool(right_wrist_names)
 
     def _pick_source(candidates: list[str], fallback: str | None = None) -> str:
         if candidates:
@@ -195,6 +197,23 @@ def _build_fallback_lerobot_modality_meta(dataset_path: Path) -> LeRobotModality
         raise ValueError(f"Could not infer video metadata from {info_path}.")
     if not annotation_meta:
         annotation_meta["human.task_description"] = LeRobotModalityField(original_key="task_index")
+
+    robot_type = str(info.get("robot_type") or "")
+    if "sharpa" in robot_type.lower() and "proprio" in state_meta and "proprio" in action_meta:
+        qpos_dim = int(action_meta["proprio"].end - action_meta["proprio"].start)
+        raw_state_dim = int(state_meta["proprio"].end - state_meta["proprio"].start)
+        if qpos_dim not in (29, 58):
+            raise ValueError(
+                f"Sharpa dataset `{dataset_path}` has action width {qpos_dim}; expected 29 or 58."
+            )
+        if raw_state_dim < qpos_dim:
+            raise ValueError(
+                f"Sharpa dataset `{dataset_path}` state width {raw_state_dim} "
+                f"is shorter than action width {qpos_dim}."
+            )
+        # Keep the leading joint block. Controller-order reindexing happens later;
+        # the raw vector also contains object pose and task progress after this block.
+        state_meta["proprio"].end = int(state_meta["proprio"].start) + qpos_dim
 
     return LeRobotModalityMetadata(
         state=state_meta,
@@ -883,6 +902,16 @@ class LeRobotSingleDataset(Dataset):
                     )
                     stat = np.array(le_statistics[le_modality][stat_name])
                     dataset_statistics[our_modality][subkey][stat_name] = stat[indices].tolist()
+
+        if "sharpa" in str(le_info.get("robot_type") or "").lower():
+            proprio_stats = dataset_statistics.get("state", {}).get("proprio")
+            if proprio_stats:
+                from starVLA.dataloader.sharpa_dexarena import controller_qpos_indices
+
+                width = len(next(iter(proprio_stats.values())))
+                order = controller_qpos_indices(width)
+                for stat_name, values in proprio_stats.items():
+                    proprio_stats[stat_name] = np.asarray(values)[order].tolist()
 
         # 3. Full dataset metadata
         metadata = DatasetMetadata(
@@ -1950,7 +1979,7 @@ class LeRobotSingleDataset(Dataset):
             unique_abs, inverse = np.unique(target_abs, return_inverse=True)
             unique_vals = self._fetch_hf_column(le_key, unique_abs)
             unique_rows = self._slice_state_action_rows(unique_vals, le_start, le_end, feature_dim)
-            return unique_rows[inverse]
+            return self._reorder_sharpa_state(modality, key, unique_rows[inverse])
 
         valid_mask = np.logical_and(step_indices >= 0, step_indices < max_length)
         if not np.any(valid_mask):
@@ -1962,7 +1991,20 @@ class LeRobotSingleDataset(Dataset):
         unique_rows = self._slice_state_action_rows(unique_vals, le_start, le_end, feature_dim)
         output = np.zeros((len(step_indices), unique_rows.shape[-1]), dtype=unique_rows.dtype)
         output[valid_mask] = unique_rows[inverse]
-        return output
+        return self._reorder_sharpa_state(modality, key, output)
+
+    def _reorder_sharpa_state(self, modality: str, key: str, rows: np.ndarray) -> np.ndarray:
+        """Put Sharpa joint position into the same order as the recorded action."""
+        if modality != "state" or key != "proprio":
+            return rows
+        robot_type = ""
+        if isinstance(self.lerobot_info_meta, dict):
+            robot_type = str(self.lerobot_info_meta.get("robot_type") or "")
+        if "sharpa" not in robot_type.lower():
+            return rows
+        from starVLA.dataloader.sharpa_dexarena import reorder_controller_qpos
+
+        return reorder_controller_qpos(rows)
 
     def get_language(
         self,
@@ -2023,7 +2065,16 @@ class LeRobotSingleDataset(Dataset):
             except Exception:
                 task_indices.append(None)
 
-        return [self._task_index_to_task.get(i, "") if i is not None else "" for i in task_indices]
+        texts = [self._task_index_to_task.get(i, "") if i is not None else "" for i in task_indices]
+        robot_type = ""
+        if isinstance(getattr(self, "lerobot_info_meta", None), dict):
+            robot_type = str(self.lerobot_info_meta.get("robot_type") or "")
+        if "sharpa" in robot_type.lower():
+            from starVLA.dataloader.sharpa_dexarena import episode_instruction
+
+            instruction = episode_instruction(self.dataset_name, int(trajectory_id))
+            return [instruction for _ in texts]
+        return texts
 
     def get_data_by_modality(
         self,
