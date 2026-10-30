@@ -129,16 +129,17 @@ class LatentWorldPolicyConfigBuilder:
         # Validate head selection before any model or dataloader is constructed.
         _ = policy_cfg.num_vlm_action_queries
         from starVLA.interaction_geometry import ENTITY_NAMES, FEATURE_DIM
-        from starVLA.model.framework.vlas.wm_geometry import WM_MODES
+        from starVLA.model.framework.vlas.interaction_tokens import AUX_MODES, MODES
+        from starVLA.model.framework.vlas.wm_geometry import FUTURE_GEOMETRY_MODES, WM_MODES
         mode = str(policy_cfg.interaction_mode)
-        wm_mode = mode in WM_MODES
-        labels = mode in {"oracle", "visual_aux", *WM_MODES}
-        if mode not in {"none", "oracle", "visual", "visual_aux", *WM_MODES}:
+        future_mode = mode in FUTURE_GEOMETRY_MODES
+        labels = mode in {"oracle", *AUX_MODES, *WM_MODES}
+        if mode not in {*MODES, *WM_MODES}:
             raise ValueError("Unknown interaction_mode")
         flow = policy_cfg.flow_cfg
-        if bool(flow.interaction_conditioning) != (mode in {"oracle", "visual", "visual_aux"}):
-            raise ValueError("interaction_conditioning is enabled only for oracle/visual/visual_aux")
-        if wm_mode and (not policy_cfg.future_prediction or policy_cfg.flow_future_feature != 'predicted'
+        if bool(flow.interaction_conditioning) != (mode in MODES[1:]):
+            raise ValueError("interaction_conditioning is enabled only for oracle/visual/visual_aux/visual_pred_aux")
+        if future_mode and (not policy_cfg.future_prediction or policy_cfg.flow_future_feature != 'predicted'
                         or policy_cfg.enable_flow_h_t1_scheduled_sampling):
             raise ValueError('WM geometry requires predicted future features without scheduled sampling')
         if mode != "none":
@@ -159,7 +160,7 @@ class LatentWorldPolicyConfigBuilder:
             if labels and (policy_cfg.interaction_feature_mean is None or policy_cfg.interaction_feature_std is None):
                 raise ValueError("Geometry experiments require training-only feature mean/std")
         weight = float(policy_cfg.interaction_loss_weight)
-        auxiliary = mode in {'visual_aux', *WM_MODES}
+        auxiliary = mode in {*AUX_MODES, *WM_MODES}
         if not math.isfinite(weight) or (auxiliary and weight <= 0) or (not auxiliary and weight != 0):
             raise ValueError("Positive interaction_loss_weight is required only for geometry auxiliary modes")
         if policy_cfg.plan_pose_conditioning:

@@ -117,7 +117,7 @@ def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mod
         interaction_entities=7,
         interaction_queries=3,
         interaction_layers=1,
-        interaction_loss_weight=.1 if interaction in {"visual_aux", "visual_wm_aux", "visual_wm_aux_detach"} else 0.,
+        interaction_loss_weight=.1 if interaction in {"visual_aux", "visual_pred_aux", "visual_wm_aux", "visual_wm_aux_detach"} else 0.,
         interaction_feature_mean=(0.,)*17,
         interaction_feature_std=(1.,)*17,
         plan_pose_conditioning=plan_pose,
@@ -136,7 +136,7 @@ def build_tiny_backend(mode="external_qformer", *, alternate=True, fingertip_mod
         fingertip_loss_weight=0.05 if fingertip_mode else 0.0,
         fingertip_target_mode=fingertip_mode or "delta",
         flow_cfg=ConditionalFlowMatchingConfig(
-            interaction_conditioning=interaction in {"oracle", "visual", "visual_aux"},
+            interaction_conditioning=interaction in {"oracle", "visual", "visual_aux", "visual_pred_aux"},
             interaction_token_dim=16,
             interaction_heads=4,
             pose_conditioning=pose,

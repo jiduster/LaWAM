@@ -1,11 +1,13 @@
-"""Task-conditioned compact geometry tokens; no future frames or labels in visual inference."""
+"""Task-conditioned compact tokens from observed or predicted DINO patches."""
 import math
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-MODES = ('none', 'oracle', 'visual', 'visual_aux')
+PRED_VISUAL_MODES = ('visual_pred_aux',)
+AUX_MODES = ('visual_aux', *PRED_VISUAL_MODES)
+MODES = ('none', 'oracle', 'visual', *AUX_MODES)
 
 
 class QueryBlock(nn.Module):
@@ -45,7 +47,7 @@ class InteractionTokens(nn.Module):
         else:
             self.input_projection = nn.Linear(vision_dim,dim)
             self.spatial_projection = nn.Sequential(nn.Linear(2,dim),nn.GELU(),nn.Linear(dim,dim))
-        # Both visual controls have the SAME readout and parameter initialization.
+        # All visual modes share the same readout and parameter initialization.
         self.readout_attention = nn.MultiheadAttention(dim,heads,batch_first=True)
         self.readout = nn.Linear(dim,feature_dim)
         mean = torch.zeros(feature_dim) if mean is None else torch.as_tensor(mean,dtype=torch.float32)
@@ -89,7 +91,7 @@ class InteractionTokens(nn.Module):
             count=current_vision.shape[1]
             side=math.isqrt(count)
             if side*side != count:
-                raise ValueError('Interaction visual tokens require a square current DINO patch grid')
+                raise ValueError('Interaction visual tokens require a square DINO patch grid')
             axis=torch.linspace(-1,1,side,device=current_vision.device,dtype=dtype)
             yy,xx=torch.meshgrid(axis,axis,indexing='ij')
             xy=torch.stack((xx,yy),-1).reshape(1,count,2)

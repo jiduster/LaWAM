@@ -227,17 +227,22 @@ class InteractionTests(unittest.TestCase):
             self.assertFalse(configs[2].datasets.vla_data.load_interaction_geometry)
             self.assertTrue(configs[3].datasets.vla_data.load_interaction_geometry)
             from starVLA.model.framework.latent_world.config_builder import LatentWorldPolicyConfigBuilder
-            for mode in ('visual_wm_aux', 'visual_wm_aux_detach'):
+            for mode in ('visual_wm_aux', 'visual_wm_aux_detach', 'visual_pred_aux'):
                 args.variant = mode
                 future = OmegaConf.load(configure(args)[0])
                 built = LatentWorldPolicyConfigBuilder(future).build()
                 self.assertEqual(future.interaction_experiment.sha256, configs[0].interaction_experiment.sha256)
                 self.assertTrue(future.datasets.vla_data.load_future_interaction_geometry)
-                self.assertFalse(built.flow_cfg.interaction_conditioning)
+                self.assertEqual(built.flow_cfg.interaction_conditioning, mode == 'visual_pred_aux')
+                if mode == 'visual_pred_aux':
+                    self.assertEqual(built.interaction_queries, 8)
+                    self.assertEqual(built.fingertip_loss_weight, 0)
                 self.assertTrue(built.detach_future_feature)
                 self.assertGreater(built.interaction_loss_weight, 0)
                 for field, value in (('future_prediction', False), ('action_expert_only', True),
-                                     ('flow_future_feature', 'current')):
+                                     ('flow_future_feature', 'current'),
+                                     ('enable_flow_h_t1_scheduled_sampling', True),
+                                     ('interaction_loss_weight', 0)):
                     invalid = copy.deepcopy(future)
                     invalid.framework.action_model[field] = value
                     with self.assertRaises(ValueError):

@@ -29,7 +29,7 @@ from .depth_queries import (
 from .flowmatching_expert import ConditionalFlowMatchingConfig, ConditionalFlowMatchingHead
 from .latent_action_head import LatentActionHead as VLMToLAMQFormer
 from .pose_conditioning import PoseEncoder
-from .interaction_tokens import InteractionTokens, MODES
+from .interaction_tokens import AUX_MODES, PRED_VISUAL_MODES, InteractionTokens, MODES
 from .wm_geometry import FutureGeometryHead, WM_MODES
 
 
@@ -89,7 +89,7 @@ class LatentWorldPolicyConfig:
     flow_action_num_queries: int = 8
     latent_action_head_type: str = "vlm_queries"  # "vlm_queries" | "external_qformer"
 
-    # Current action conditioning or training-only visual_wm_aux[_detach].
+    # Current/predicted visual token conditioning or training-only visual_wm_aux[_detach].
     interaction_mode: str = "none"
     interaction_task: str = ""
     interaction_entities: int = 0
@@ -467,6 +467,13 @@ class LatentWorldPolicyBackend(nn.Module):
         self.sync_training_modes(mode=self.training)
 
         self.interaction_encoder = None
+        if self.model_cfg.interaction_mode in PRED_VISUAL_MODES:
+            if (self.model_cfg.action_expert_only or not self.model_cfg.future_prediction
+                    or self.model_cfg.flow_future_feature != 'predicted'
+                    or self.model_cfg.enable_flow_h_t1_scheduled_sampling
+                    or not self.model_cfg.flow_cfg.interaction_conditioning):
+                raise ValueError('Predicted visual tokens require full Stage 2, predicted future features '
+                                 'without scheduled sampling, and interaction_conditioning=true')
         if self.model_cfg.interaction_mode in MODES[1:]:
             with torch.random.fork_rng(devices=[]):
                 self.interaction_encoder = InteractionTokens(
@@ -1061,9 +1068,13 @@ class LatentWorldPolicyBackend(nn.Module):
 
         interaction_tokens, interaction_prediction = None, None
         if self.interaction_encoder is not None:
+            # Read the prediction directly, before the original flow branch's detach.
+            # Both geometry and action losses can train the WM through these tokens.
+            interaction_vision = (h_t1_pred if self.model_cfg.interaction_mode in PRED_VISUAL_MODES
+                                  else h_t_original)
             with _cuda_autocast(torch.float32):
                 interaction_tokens, interaction_prediction = self.interaction_encoder(
-                    current_vision=h_t_original,vlm=h_vlm,
+                    current_vision=interaction_vision,vlm=h_vlm,
                     language_mask=prepared_batch["attention_mask"].bool(),
                     state=prepared_batch["state"],state_mask=prepared_batch["state_mask"],
                     geometry=prepared_batch.get("interaction_geometry"),
@@ -1192,12 +1203,15 @@ class LatentWorldPolicyBackend(nn.Module):
 
         loss_interaction = torch.zeros((),device=device,dtype=torch.float32)
         if self.interaction_encoder is not None:
-            if self.model_cfg.interaction_mode == "visual_aux":
-                if "interaction_geometry" not in prepared_batch or "interaction_valid" not in prepared_batch:
-                    raise KeyError("visual_aux training requires audited current geometry targets")
+            if self.model_cfg.interaction_mode in AUX_MODES:
+                future = self.model_cfg.interaction_mode in PRED_VISUAL_MODES
+                prefix = 'future_' if future else ''
+                if prefix + "interaction_geometry" not in prepared_batch or prefix + "interaction_valid" not in prepared_batch:
+                    raise KeyError(f"{self.model_cfg.interaction_mode} training requires audited "
+                                   f"{'aligned future' if future else 'current'} geometry targets")
                 loss_interaction = self.interaction_encoder.auxiliary_loss(
-                    shared.interaction_prediction,prepared_batch["interaction_geometry"],
-                    prepared_batch["interaction_valid"])
+                    shared.interaction_prediction,prepared_batch[prefix + "interaction_geometry"],
+                    prepared_batch[prefix + "interaction_valid"])
             else:
                 # Keep control readout parameters in the DDP graph without supervising geometry.
                 loss_interaction = shared.interaction_prediction.sum()*0.0
@@ -1262,7 +1276,7 @@ class LatentWorldPolicyBackend(nn.Module):
                 + self.model_cfg.fingertip_loss_weight * loss_fingertip
                 + self.model_cfg.depth_loss_weight * loss_depth
                 + self.model_cfg.interaction_loss_weight * loss_wm_geometry
-                + (self.model_cfg.interaction_loss_weight if self.model_cfg.interaction_mode == "visual_aux" else 1.0) * loss_interaction
+                + (self.model_cfg.interaction_loss_weight if self.model_cfg.interaction_mode in AUX_MODES else 1.0) * loss_interaction
             )
 
         if self.model_cfg.action_expert_only:

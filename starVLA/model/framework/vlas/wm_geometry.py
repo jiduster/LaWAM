@@ -6,9 +6,10 @@ from torch import nn
 from torch.nn import functional as F
 
 from starVLA.interaction_geometry import ENTITY_NAMES, FEATURE_DIM
-from .interaction_tokens import QueryBlock
+from .interaction_tokens import PRED_VISUAL_MODES, QueryBlock
 
 WM_MODES = ('visual_wm_aux', 'visual_wm_aux_detach')
+FUTURE_GEOMETRY_MODES = (*WM_MODES, *PRED_VISUAL_MODES)
 
 
 def dynamic_geometry_mask(task):

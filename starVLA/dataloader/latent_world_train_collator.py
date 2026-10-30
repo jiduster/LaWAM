@@ -154,8 +154,8 @@ class LatentWorldTrainCollator:
         pose_frames: list[torch.Tensor] = []
         interaction_frames, interaction_masks = [], []
         future_geometry, future_masks = [], []
-        from starVLA.model.framework.vlas.wm_geometry import WM_MODES
-        wm_labels = getattr(self.policy_cfg, 'interaction_mode', 'none') in WM_MODES
+        from starVLA.model.framework.vlas.wm_geometry import FUTURE_GEOMETRY_MODES
+        wm_labels = getattr(self.policy_cfg, 'interaction_mode', 'none') in FUTURE_GEOMETRY_MODES
         interaction_labels = getattr(self.policy_cfg, "interaction_mode", "none") in {"oracle", "visual_aux"}
         pose_enabled = pose_conditioning_enabled(self.policy_cfg)
         instructions: list[str] = []

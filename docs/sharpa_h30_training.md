@@ -68,3 +68,42 @@ python scripts/validate_sharpa_training.py \
 末端沿用既有 loader 行为：不足 H30 时重复该 episode 最后一个绝对关节目标和最后一幅主视角图；因此末端样本实际视觉间隔会短于 1.45 秒。此次验证没有把它误报为固定间隔样本。
 
 这是配置和数据链路验证，缩小 flow 的视觉/VLM 特征是合成张量。没有运行完整 VLM/LAM 的 GPU 训练，也没有执行仿真成功率评估；本次不据此判断 Stage 1 适配的收益。
+
+## 仿真评测
+
+开门训练产物：
+
+`results/Checkpoints/sharpa_cabinet_pour_door_open/20261029_191743+sharpa_cabinet_pour_door_open_h30_sft/final_model/pytorch_model.pt`
+
+推理服务跑在 `lawam` 环境。评测客户端要能 import DexArena 和 ManiSkill，这台机器上的 `lawam` 环境没有 ManiSkill，README 里的 `ms3` 环境也还没建。两个进程不要塞进同一个环境。
+
+服务端按 checkpoint 里的 `min/max` 做 state 归一化和动作反归一化，并要求请求带上训练时的腕部视角：单臂 1 路，双臂先左后右。评测端直接使用 ManiSkill 环境本身，按 controller 顺序读关节，再把 `base_camera` 和腕部相机发给服务。成功与否读环境 `info["success"]`。开门任务的上限是 600 步，动作块是 30 步（20 Hz 下 1.5 秒）。
+
+```bash
+# terminal 1
+conda activate lawam
+cd /data/home/zyh/LaWAM
+export PYTHONPATH=/data/home/zyh/LaWAM
+export HF_HOME=/tmp/lawam_hf_cache
+CUDA_VISIBLE_DEVICES=0 python examples/DexArena/eval_files/lawam_sharpa_server.py \
+  --checkpoint results/Checkpoints/sharpa_cabinet_pour_door_open/20261029_191743+sharpa_cabinet_pour_door_open_h30_sft/final_model/pytorch_model.pt \
+  --unnorm-key sharpa_left \
+  --port 10093
+
+# terminal 2, in the DexArena / ManiSkill environment
+cd /data/home/zyh/LaWAM
+export PYTHONPATH=/data/home/zyh/LaWAM
+python examples/DexArena/eval_files/eval_lawam_sharpa.py \
+  --env-id CabinetPourDoorOpen-v1 \
+  --task-module task/cabinet_pour_door_open.py \
+  --dexarena-root /data/home/zyh/DexArena \
+  --unnorm-key sharpa_left \
+  --camera-profile robodex_fixed \
+  --port 10093 \
+  --episodes 1 \
+  --steps 60 \
+  --video-dir /tmp/sharpa_door_eval \
+  --output /tmp/sharpa_door_eval/summary.json
+```
+
+先用上面的 1 条、60 步确认环境和协议能对上，再去掉 `--steps 60`、把 `--episodes` 调到要统计的次数。正式统计沿用任务自己的 600 步上限。
