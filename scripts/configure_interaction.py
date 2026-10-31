@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parents[1]
 TEMPLATE = REPO / 'starVLA/config/training/starvla_train_dexjoco_interaction_stage2.yaml'
 VARIANTS = ('baseline', 'oracle', 'visual', 'visual_aux')
 WM_VARIANTS = ('visual_wm_aux', 'visual_wm_aux_detach')
-PRED_VARIANTS = ('visual_pred_aux',)
+PRED_VARIANTS = ('visual_pred_aux', 'visual_joint_aux')
 TASKS = {'hanoi': 'bimanual_hanoi', 'microwave': 'bimanual_microwave_cook'}
 
 
@@ -134,6 +134,12 @@ def configure(args):
                 supervision='full geometry schema, masked per feature (same as visual_aux)',
                 token_source='predicted future DINO + current VLM context + current robot state',
                 action_conditioning=True, detach=False, weight=args.aux_weight)
+        if variant == 'visual_joint_aux':
+            current.interaction_experiment.future_geometry = dict(
+                timestamp='predicted WM frame used only as compact-token context',
+                supervision='current full geometry schema, masked per feature (same as visual_aux)',
+                token_source='current DINO + predicted future DINO + current VLM context + current robot state',
+                action_conditioning=True, detach=False, weight=args.aux_weight)
         if labels:
             policy.interaction_sidecar_root = str(args.sidecar_root.expanduser().resolve())
             policy.interaction_feature_mean = stats['mean']
@@ -143,7 +149,7 @@ def configure(args):
             policy.interaction_allow_empty_frames = (
                 bool(sidecar_manifest.get('allow_empty_frames', False)) and variant != 'oracle')
         current.datasets.vla_data.load_interaction_geometry = labels
-        current.datasets.vla_data.load_future_interaction_geometry = wm_mode or pred_mode
+        current.datasets.vla_data.load_future_interaction_geometry = wm_mode or variant == 'visual_pred_aux'
         current.datasets.vla_data.interaction_sidecar_root = str(args.sidecar_root.expanduser().resolve()) if labels else ''
         current.run_id = f'{task}_interaction_{variant}_h30_{args.steps}_seed{args.seed}'
         current.run_root_dir = str(args.output_root.expanduser().resolve()/task/variant)

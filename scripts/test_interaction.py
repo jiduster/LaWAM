@@ -45,7 +45,7 @@ class InteractionTests(unittest.TestCase):
 
     def test_zero_init_equivalence_train_and_inference_both_dits(self):
         for alternate in (False,True):
-            for mode in ('oracle','visual','visual_aux'):
+            for mode in ('oracle','visual','visual_aux','visual_joint_aux'):
                 torch.manual_seed(3)
                 baseline=build_tiny_backend('vlm_queries',alternate=alternate)
                 torch.manual_seed(3)
@@ -120,6 +120,27 @@ class InteractionTests(unittest.TestCase):
         aux.train()
         with self.assertRaisesRegex(KeyError,'requires audited'):
             aux(batch={k:v for k,v in batch.items() if not k.startswith('interaction_')})
+
+    def test_visual_joint_reads_current_and_predicted_patches_and_current_geometry(self):
+        model = build_tiny_backend('vlm_queries', interaction='visual_joint_aux').eval()
+        batch = batch_for(model)
+        seen = []
+        hook = model.interaction_encoder.register_forward_pre_hook(
+            lambda module, args, kwargs: seen.append(kwargs), with_kwargs=True)
+        encoded = model._run_shared_encoding_train(
+            prepared_batch=batch, source='test', lam_features_with_no_grad=True)
+        self.assertEqual(encoded.interaction_tokens.shape, (2, 3, 16))
+        self.assertIs(seen[0]['future_vision'], encoded.h_t1_pred)
+        self.assertIs(seen[0]['current_vision'], encoded.h_t_original)
+        changed = copy.deepcopy(batch)
+        changed['interaction_geometry'].fill_(999)
+        changed['interaction_valid'].fill_(True)
+        other = model._run_shared_encoding_train(
+            prepared_batch=changed, source='test', lam_features_with_no_grad=True)
+        torch.testing.assert_close(encoded.interaction_tokens, other.interaction_tokens)
+        with self.assertRaisesRegex(KeyError, 'visual_joint_aux training'):
+            model(batch={k: v for k, v in batch.items() if not k.startswith('interaction_')})
+        hook.remove()
 
     def test_oracle_padding_and_vlm_padding_are_ignored(self):
         model=InteractionTokens(mode='oracle',vision_dim=8,vlm_dim=8,state_dim=4,entities=7,dim=8,queries=3,heads=2,layers=1)
@@ -227,14 +248,16 @@ class InteractionTests(unittest.TestCase):
             self.assertFalse(configs[2].datasets.vla_data.load_interaction_geometry)
             self.assertTrue(configs[3].datasets.vla_data.load_interaction_geometry)
             from starVLA.model.framework.latent_world.config_builder import LatentWorldPolicyConfigBuilder
-            for mode in ('visual_wm_aux', 'visual_wm_aux_detach', 'visual_pred_aux'):
+            for mode in ('visual_wm_aux', 'visual_wm_aux_detach', 'visual_pred_aux', 'visual_joint_aux'):
                 args.variant = mode
                 future = OmegaConf.load(configure(args)[0])
                 built = LatentWorldPolicyConfigBuilder(future).build()
                 self.assertEqual(future.interaction_experiment.sha256, configs[0].interaction_experiment.sha256)
-                self.assertTrue(future.datasets.vla_data.load_future_interaction_geometry)
-                self.assertEqual(built.flow_cfg.interaction_conditioning, mode == 'visual_pred_aux')
-                if mode == 'visual_pred_aux':
+                self.assertEqual(future.datasets.vla_data.load_future_interaction_geometry,
+                                 mode in ('visual_wm_aux', 'visual_wm_aux_detach', 'visual_pred_aux'))
+                self.assertEqual(built.flow_cfg.interaction_conditioning,
+                                 mode in ('visual_pred_aux', 'visual_joint_aux'))
+                if mode in ('visual_pred_aux', 'visual_joint_aux'):
                     self.assertEqual(built.interaction_queries, 8)
                     self.assertEqual(built.fingertip_loss_weight, 0)
                 self.assertTrue(built.detach_future_feature)

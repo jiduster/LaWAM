@@ -6,7 +6,10 @@ from torch.nn import functional as F
 
 
 PRED_VISUAL_MODES = ('visual_pred_aux',)
-AUX_MODES = ('visual_aux', *PRED_VISUAL_MODES)
+# Joint compact tokens read both the observed and WM-predicted patch grids.
+JOINT_VISUAL_MODES = ('visual_joint_aux',)
+PRED_TOKEN_MODES = (*PRED_VISUAL_MODES, *JOINT_VISUAL_MODES)
+AUX_MODES = ('visual_aux', *PRED_VISUAL_MODES, *JOINT_VISUAL_MODES)
 MODES = ('none', 'oracle', 'visual', *AUX_MODES)
 
 
@@ -47,6 +50,9 @@ class InteractionTokens(nn.Module):
         else:
             self.input_projection = nn.Linear(vision_dim,dim)
             self.spatial_projection = nn.Sequential(nn.Linear(2,dim),nn.GELU(),nn.Linear(dim,dim))
+            if mode in JOINT_VISUAL_MODES:
+                self.future_input_projection = nn.Linear(vision_dim, dim)
+                self.frame_embedding = nn.Embedding(2, dim)
         # All visual modes share the same readout and parameter initialization.
         self.readout_attention = nn.MultiheadAttention(dim,heads,batch_first=True)
         self.readout = nn.Linear(dim,feature_dim)
@@ -61,6 +67,7 @@ class InteractionTokens(nn.Module):
         return (value.float()-self.feature_mean.float())/self.feature_std.float()
 
     def forward(self, *, current_vision, vlm, language_mask, state, state_mask,
+                future_vision=None,
                 geometry=None, geometry_mask=None):
         dtype = self.query.dtype
         if vlm.ndim != 3 or language_mask.shape != vlm.shape[:2]:
@@ -88,6 +95,8 @@ class InteractionTokens(nn.Module):
             context = self.input_projection(x.to(dtype)) + self.entity_embedding.weight.unsqueeze(0)
         else:
             # Labels cannot enter this branch, even when supplied for auxiliary loss.
+            if current_vision.ndim != 3:
+                raise ValueError('Interaction visual tokens require patch features [B,K,D]')
             count=current_vision.shape[1]
             side=math.isqrt(count)
             if side*side != count:
@@ -95,7 +104,21 @@ class InteractionTokens(nn.Module):
             axis=torch.linspace(-1,1,side,device=current_vision.device,dtype=dtype)
             yy,xx=torch.meshgrid(axis,axis,indexing='ij')
             xy=torch.stack((xx,yy),-1).reshape(1,count,2)
-            context=self.input_projection(current_vision.to(dtype))+self.spatial_projection(xy)
+            current_context = (self.input_projection(current_vision.to(dtype))
+                               + self.spatial_projection(xy)
+                               + (self.frame_embedding.weight[0].view(1, 1, -1)
+                                  if self.mode in JOINT_VISUAL_MODES else 0))
+            if self.mode in JOINT_VISUAL_MODES:
+                if future_vision is None:
+                    raise KeyError('visual_joint_aux requires predicted future DINO patches')
+                if future_vision.ndim != 3 or future_vision.shape != current_vision.shape:
+                    raise ValueError('Joint interaction visual features must have matching [B,K,D] shapes')
+                future_context = (self.future_input_projection(future_vision.to(dtype))
+                                  + self.spatial_projection(xy)
+                                  + self.frame_embedding.weight[1].view(1, 1, -1))
+                context = torch.cat((current_context, future_context), dim=1)
+            else:
+                context = current_context
             valid=None
         for block in self.blocks:
             query=block(query,context,valid)

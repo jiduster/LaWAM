@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 if [[ $# -lt 2 ]]; then
-  echo 'Usage: bash scripts/train_interaction_reviewed.sh {hanoi|microwave} {baseline|visual|visual_aux|visual_pred_aux|oracle|visual_wm_aux|visual_wm_aux_detach} [--dry-run]' >&2
+  echo 'Usage: bash scripts/train_interaction_reviewed.sh {hanoi|microwave} {baseline|visual|visual_aux|visual_pred_aux|visual_joint_aux|oracle|visual_wm_aux|visual_wm_aux_detach} [--dry-run]' >&2
   exit 1
 fi
 case "$1" in

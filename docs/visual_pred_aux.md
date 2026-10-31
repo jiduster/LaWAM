@@ -1,5 +1,13 @@
 # Predicted-future compact visual tokens
 
+Diagrams: [architecture (SVG)](figures/visual_pred_aux_architecture.svg) /
+[PNG](figures/visual_pred_aux_architecture.png),
+[training (SVG)](figures/visual_pred_aux_training.svg) /
+[PNG](figures/visual_pred_aux_training.png),
+[inference (SVG)](figures/visual_pred_aux_inference.svg) /
+[PNG](figures/visual_pred_aux_inference.png).
+Regenerate with `python docs/figures/draw_visual_pred_aux.py`.
+
 `visual_pred_aux` follows `visual_aux`: the same compact-token encoder,
 geometry readout and zero-initialized residual attention in the action expert.
 The visual input changes from current DINO patches to the World Model's

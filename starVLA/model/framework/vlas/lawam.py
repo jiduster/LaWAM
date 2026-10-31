@@ -29,7 +29,7 @@ from .depth_queries import (
 from .flowmatching_expert import ConditionalFlowMatchingConfig, ConditionalFlowMatchingHead
 from .latent_action_head import LatentActionHead as VLMToLAMQFormer
 from .pose_conditioning import PoseEncoder
-from .interaction_tokens import AUX_MODES, PRED_VISUAL_MODES, InteractionTokens, MODES
+from .interaction_tokens import AUX_MODES, PRED_TOKEN_MODES, PRED_VISUAL_MODES, InteractionTokens, MODES
 from .wm_geometry import FutureGeometryHead, WM_MODES
 
 
@@ -467,7 +467,7 @@ class LatentWorldPolicyBackend(nn.Module):
         self.sync_training_modes(mode=self.training)
 
         self.interaction_encoder = None
-        if self.model_cfg.interaction_mode in PRED_VISUAL_MODES:
+        if self.model_cfg.interaction_mode in PRED_TOKEN_MODES:
             if (self.model_cfg.action_expert_only or not self.model_cfg.future_prediction
                     or self.model_cfg.flow_future_feature != 'predicted'
                     or self.model_cfg.enable_flow_h_t1_scheduled_sampling
@@ -1072,9 +1072,11 @@ class LatentWorldPolicyBackend(nn.Module):
             # Both geometry and action losses can train the WM through these tokens.
             interaction_vision = (h_t1_pred if self.model_cfg.interaction_mode in PRED_VISUAL_MODES
                                   else h_t_original)
+            interaction_future_vision = (
+                h_t1_pred if self.model_cfg.interaction_mode == 'visual_joint_aux' else None)
             with _cuda_autocast(torch.float32):
                 interaction_tokens, interaction_prediction = self.interaction_encoder(
-                    current_vision=interaction_vision,vlm=h_vlm,
+                    current_vision=interaction_vision, future_vision=interaction_future_vision, vlm=h_vlm,
                     language_mask=prepared_batch["attention_mask"].bool(),
                     state=prepared_batch["state"],state_mask=prepared_batch["state_mask"],
                     geometry=prepared_batch.get("interaction_geometry"),

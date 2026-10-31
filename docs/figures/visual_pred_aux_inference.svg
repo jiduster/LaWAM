@@ -1,0 +1,367 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="1440pt" height="633.6pt" viewBox="0 0 1440 633.6" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-30T20:22:14.210923</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.8, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 633.6 
+L 1440 633.6 
+L 1440 0 
+L 0 0 
+z
+" style="fill: #f7f9fc"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 36 93.6 
+L 1404 93.6 
+Q 1419.84 93.6 1419.84 109.44 
+L 1419.84 597.6 
+Q 1419.84 613.44 1404 613.44 
+L 36 613.44 
+Q 20.16 613.44 20.16 597.6 
+L 20.16 109.44 
+Q 20.16 93.6 36 93.6 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #ffffff; stroke: #dce3ed; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 266.4 345.6 
+L 343.587539 345.6 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 337.587539 342.6 
+L 343.587539 345.6 
+L 337.587539 348.6 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 266.4 198 
+L 446.4 198 
+L 446.4 303.987539 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 449.4 297.987539 
+L 446.4 303.987539 
+L 443.4 297.987539 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 547.2 345.6 
+L 624.387539 345.6 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 618.387539 342.6 
+L 624.387539 345.6 
+L 618.387539 348.6 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 730.8 306 
+L 730.8 239.612461 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 727.8 245.612461 
+L 730.8 239.612461 
+L 733.8 245.612461 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 266.4 180 
+L 624.387539 180 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 618.387539 177 
+L 624.387539 180 
+L 618.387539 183 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 547.2 147.6 
+L 590.4 147.6 
+L 590.4 208.8 
+L 624.387539 208.8 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 618.387539 205.8 
+L 624.387539 208.8 
+L 618.387539 211.8 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 835.2 198 
+L 905.187539 198 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 899.187539 195 
+L 905.187539 198 
+L 899.187539 201 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 1004.4 237.6 
+L 1004.4 303.987539 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 1007.4 297.987539 
+L 1004.4 303.987539 
+L 1001.4 297.987539 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 835.2 345.6 
+L 905.187539 345.6 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 899.187539 342.6 
+L 905.187539 345.6 
+L 899.187539 348.6 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 162 385.2 
+L 162 421.2 
+L 936 421.2 
+L 936 387.212461 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 933 393.212461 
+L 936 387.212461 
+L 939 393.212461 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 1101.6 345.6 
+L 1185.987539 345.6 
+" clip-path="url(#p9f262490e2)" style="fill: none; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+    <path d="M 1179.987539 342.6 
+L 1185.987539 345.6 
+L 1179.987539 348.6 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #346ac3; stroke: #346ac3; stroke-width: 1.8; stroke-linecap: round"/>
+   </g>
+   <g id="text_1">
+    <text style="font-weight: 700; font-size: 23px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #182b45" x="37.44" y="42.026719" transform="rotate(-0 37.44 42.026719)">visual_pred_aux  /  Inference</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #586b82" x="37.44" y="70.99125" transform="rotate(-0 37.44 70.99125)">Inputs: current observations, instruction and current robot state. Future features are predicted by the model.</text>
+   </g>
+   <g id="patch_14">
+    <path d="M 66.96 158.4 
+L 257.04 158.4 
+Q 266.4 158.4 266.4 167.76 
+L 266.4 228.24 
+Q 266.4 237.6 257.04 237.6 
+L 66.96 237.6 
+Q 57.6 237.6 57.6 228.24 
+L 57.6 167.76 
+Q 57.6 158.4 66.96 158.4 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #eaf1fd; stroke: #346ac3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_3">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="162" y="191.95125" transform="rotate(-0 162 191.95125)">Current views + instruction</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="162" y="216.737344" transform="rotate(-0 162 216.737344)">VLM -&gt; latent action + context</text>
+   </g>
+   <g id="patch_15">
+    <path d="M 66.96 306 
+L 257.04 306 
+Q 266.4 306 266.4 315.36 
+L 266.4 375.84 
+Q 266.4 385.2 257.04 385.2 
+L 66.96 385.2 
+Q 57.6 385.2 57.6 375.84 
+L 57.6 315.36 
+Q 57.6 306 66.96 306 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #eaf1fd; stroke: #346ac3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_5">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="162" y="339.776406" transform="rotate(-0 162 339.776406)">Current ego image</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="162" y="364.337344" transform="rotate(-0 162 364.337344)">Frozen DINO -&gt; current patches</text>
+   </g>
+   <g id="patch_16">
+    <path d="M 354.96 306 
+L 537.84 306 
+Q 547.2 306 547.2 315.36 
+L 547.2 375.84 
+Q 547.2 385.2 537.84 385.2 
+L 354.96 385.2 
+Q 345.6 385.2 345.6 375.84 
+L 345.6 315.36 
+Q 345.6 306 354.96 306 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #eaf1fd; stroke: #346ac3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_7">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="446.4" y="339.827188" transform="rotate(-0 446.4 339.827188)">WM decoder</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="446.4" y="364.337344" transform="rotate(-0 446.4 364.337344)">Predict the future patch grid</text>
+   </g>
+   <g id="patch_17">
+    <path d="M 635.76 306 
+L 825.84 306 
+Q 835.2 306 835.2 315.36 
+L 835.2 375.84 
+Q 835.2 385.2 825.84 385.2 
+L 635.76 385.2 
+Q 626.4 385.2 626.4 375.84 
+L 626.4 315.36 
+Q 626.4 306 635.76 306 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #e6f5ef; stroke: #198775; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_9">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="730.8" y="339.827188" transform="rotate(-0 730.8 339.827188)">Predicted future DINO</text>
+   </g>
+   <g id="text_10">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="730.8" y="364.337344" transform="rotate(-0 730.8 364.337344)">No future image is required</text>
+   </g>
+   <g id="patch_18">
+    <path d="M 635.76 158.4 
+L 825.84 158.4 
+Q 835.2 158.4 835.2 167.76 
+L 835.2 228.24 
+Q 835.2 237.6 825.84 237.6 
+L 635.76 237.6 
+Q 626.4 237.6 626.4 228.24 
+L 626.4 167.76 
+Q 626.4 158.4 635.76 158.4 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #eaf1fd; stroke: #346ac3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_11">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="730.8" y="192.227188" transform="rotate(-0 730.8 192.227188)">Compact token encoder</text>
+   </g>
+   <g id="text_12">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="730.8" y="216.737344" transform="rotate(-0 730.8 216.737344)">Same encoder as during training</text>
+   </g>
+   <g id="patch_19">
+    <path d="M 354.96 115.2 
+L 537.84 115.2 
+Q 547.2 115.2 547.2 124.56 
+L 547.2 167.04 
+Q 547.2 176.4 537.84 176.4 
+L 354.96 176.4 
+Q 345.6 176.4 345.6 167.04 
+L 345.6 124.56 
+Q 345.6 115.2 354.96 115.2 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #eaf1fd; stroke: #346ac3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_13">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="446.4" y="140.027188" transform="rotate(-0 446.4 140.027188)">Current robot state</text>
+   </g>
+   <g id="text_14">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="446.4" y="164.537344" transform="rotate(-0 446.4 164.537344)">State + validity mask</text>
+   </g>
+   <g id="patch_20">
+    <path d="M 916.56 158.4 
+L 1092.24 158.4 
+Q 1101.6 158.4 1101.6 167.76 
+L 1101.6 228.24 
+Q 1101.6 237.6 1092.24 237.6 
+L 916.56 237.6 
+Q 907.2 237.6 907.2 228.24 
+L 907.2 167.76 
+Q 907.2 158.4 916.56 158.4 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #e6f5ef; stroke: #198775; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_15">
+    <text style="font-weight: 700; font-size: 12px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="1004.4" y="191.95125" transform="rotate(-0 1004.4 191.95125)">8 compact tokens</text>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="1004.4" y="216.737344" transform="rotate(-0 1004.4 216.737344)">Future-conditioned representation</text>
+   </g>
+   <g id="patch_21">
+    <path d="M 916.56 306 
+L 1092.24 306 
+Q 1101.6 306 1101.6 315.36 
+L 1101.6 375.84 
+Q 1101.6 385.2 1092.24 385.2 
+L 916.56 385.2 
+Q 907.2 385.2 907.2 375.84 
+L 907.2 315.36 
+Q 907.2 306 916.56 306 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #eaf1fd; stroke: #346ac3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_17">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="1004.4" y="339.827188" transform="rotate(-0 1004.4 339.827188)">Action expert</text>
+   </g>
+   <g id="text_18">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="1004.4" y="364.337344" transform="rotate(-0 1004.4 364.337344)">Flow sampling from action noise</text>
+   </g>
+   <g id="text_19">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="583.2" y="438.635312" transform="rotate(-0 583.2 438.635312)">Original current-feature path; VLM context and state also condition the action expert</text>
+   </g>
+   <g id="patch_22">
+    <path d="M 1197.36 306 
+L 1373.04 306 
+Q 1382.4 306 1382.4 315.36 
+L 1382.4 375.84 
+Q 1382.4 385.2 1373.04 385.2 
+L 1197.36 385.2 
+Q 1188 385.2 1188 375.84 
+L 1188 315.36 
+Q 1188 306 1197.36 306 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #eaf1fd; stroke: #346ac3; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_20">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="1285.2" y="339.827188" transform="rotate(-0 1285.2 339.827188)">Action chunk</text>
+   </g>
+   <g id="text_21">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #586b82" x="1285.2" y="364.337344" transform="rotate(-0 1285.2 364.337344)">Horizon = 30 in the default recipe</text>
+   </g>
+   <g id="patch_23">
+    <path d="M 66.96 486 
+L 1373.04 486 
+Q 1382.4 486 1382.4 495.36 
+L 1382.4 563.04 
+Q 1382.4 572.4 1373.04 572.4 
+L 66.96 572.4 
+Q 57.6 572.4 57.6 563.04 
+L 57.6 495.36 
+Q 57.6 486 66.96 486 
+z
+" clip-path="url(#p9f262490e2)" style="fill: #f0f3f7; stroke: #9cabbc; stroke-width: 1.2; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_22">
+    <text style="font-weight: 700; font-size: 13px; font-family: 'DejaVu Sans'; text-anchor: middle; fill: #182b45" x="720" y="523.376406" transform="rotate(-0 720 523.376406)">No future GT image, future geometry, or fingertip label is needed</text>
+   </g>
+   <g id="text_23">
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; fill: #586b82" transform="translate(493.33125 540.662279)">Original inverse-dynamics attention remains active. No auxiliary losses are evaluated.</text>
+    <text style="font-size: 10.5px; font-family: 'DejaVu Sans'; fill: #586b82" transform="translate(432.131836 555.212408)">The shared encoder currently computes a geometry readout too; its prediction is unused for action sampling.</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p9f262490e2">
+   <rect x="0" y="0" width="1440" height="633.6"/>
+  </clipPath>
+ </defs>
+</svg>

@@ -156,7 +156,8 @@ class LatentWorldTrainCollator:
         future_geometry, future_masks = [], []
         from starVLA.model.framework.vlas.wm_geometry import FUTURE_GEOMETRY_MODES
         wm_labels = getattr(self.policy_cfg, 'interaction_mode', 'none') in FUTURE_GEOMETRY_MODES
-        interaction_labels = getattr(self.policy_cfg, "interaction_mode", "none") in {"oracle", "visual_aux"}
+        interaction_labels = getattr(self.policy_cfg, "interaction_mode", "none") in {
+            "oracle", "visual_aux", "visual_joint_aux"}
         pose_enabled = pose_conditioning_enabled(self.policy_cfg)
         instructions: list[str] = []
         actions_list: list[torch.Tensor] = []
@@ -195,7 +196,7 @@ class LatentWorldTrainCollator:
             if interaction_labels:
                 from starVLA.interaction_geometry import validate_geometry
                 if "interaction_geometry" not in sample or "interaction_valid" not in sample:
-                    raise KeyError("oracle/visual_aux requires current interaction_geometry/interaction_valid sidecar labels")
+                    raise KeyError("oracle/visual_aux/visual_joint_aux requires current interaction_geometry/interaction_valid sidecar labels")
                 value = torch.as_tensor(sample["interaction_geometry"], dtype=torch.float32)
                 valid = torch.as_tensor(sample["interaction_valid"], dtype=torch.bool)
                 allow_empty = (

@@ -129,7 +129,7 @@ class LatentWorldPolicyConfigBuilder:
         # Validate head selection before any model or dataloader is constructed.
         _ = policy_cfg.num_vlm_action_queries
         from starVLA.interaction_geometry import ENTITY_NAMES, FEATURE_DIM
-        from starVLA.model.framework.vlas.interaction_tokens import AUX_MODES, MODES
+        from starVLA.model.framework.vlas.interaction_tokens import AUX_MODES, MODES, PRED_TOKEN_MODES
         from starVLA.model.framework.vlas.wm_geometry import FUTURE_GEOMETRY_MODES, WM_MODES
         mode = str(policy_cfg.interaction_mode)
         future_mode = mode in FUTURE_GEOMETRY_MODES
@@ -138,10 +138,10 @@ class LatentWorldPolicyConfigBuilder:
             raise ValueError("Unknown interaction_mode")
         flow = policy_cfg.flow_cfg
         if bool(flow.interaction_conditioning) != (mode in MODES[1:]):
-            raise ValueError("interaction_conditioning is enabled only for oracle/visual/visual_aux/visual_pred_aux")
-        if future_mode and (not policy_cfg.future_prediction or policy_cfg.flow_future_feature != 'predicted'
+            raise ValueError("interaction_conditioning is enabled only for oracle/visual/visual_aux/visual_pred_aux/visual_joint_aux")
+        if (future_mode or mode in PRED_TOKEN_MODES) and (not policy_cfg.future_prediction or policy_cfg.flow_future_feature != 'predicted'
                         or policy_cfg.enable_flow_h_t1_scheduled_sampling):
-            raise ValueError('WM geometry requires predicted future features without scheduled sampling')
+            raise ValueError('Future geometry/predicted visual tokens require predicted future features without scheduled sampling')
         if mode != "none":
             if policy_cfg.action_expert_only:
                 raise ValueError("Interaction experiments require full Stage 2: action_expert_only=false")
